@@ -8,4 +8,4 @@ A small fork that adds a few useful features to Stats that I needed:
 
 Use the "all-features" branch to check this work out. Ask any good AI agent to prepare the certificate and build it for you.
 
- My PRs were closed instantly on original repo without any explanation, even though the code was reviewed and followed best practices.
+My PRs were closed on the original repo without any explanation, even though the code was reviewed and followed best practices.
