@@ -1,4 +1,4 @@
-A small fork that adds a few more features to Stats that I needed:
+A small fork that adds a few useful features to Stats that I needed:
 
 - Show a manual refresh button on every module
 - Refresh automatically after closing/restarting any app
