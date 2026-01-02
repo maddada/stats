@@ -119,8 +119,9 @@ public class ProcessesView: NSStackView {
 
 public class ProcessView: NSStackView {
     static let height: CGFloat = 22
-    
+
     private var pid: Int? = nil
+    private var name: String? = nil
     private var lock: Bool = false
     
     private var imageView: NSImageView = NSImageView()
@@ -233,12 +234,19 @@ public class ProcessView: NSStackView {
     
     fileprivate func set(_ process: Process_p, _ values: [String]) {
         if self.lock && process.pid != self.pid { return }
-        
+
         self.labelView.stringValue = process.name
         values.enumerated().forEach({ self.valueViews[$0.offset].stringValue = $0.element })
         self.imageView.image = process.icon
         self.pid = process.pid
+        self.name = process.name
         self.toolTip = "pid: \(process.pid)"
+    }
+
+    public override func rightMouseDown(with event: NSEvent) {
+        guard let pid = self.pid, let name = self.name else { return }
+        let menu = ProcessContextMenu.create(pid: pid, appName: name)
+        NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
     
     fileprivate func clear(_ symbol: String = "") {
