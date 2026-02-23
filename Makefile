@@ -1,5 +1,5 @@
 APP = Stats
-BUNDLE_ID = eu.exelban.$(APP)
+BUNDLE_ID = com.madda.$(APP)
 
 BUILD_PATH = $(PWD)/build
 APP_PATH = "$(BUILD_PATH)/$(APP).app"
@@ -18,7 +18,7 @@ archive: clean
 
 	xcodebuild \
   		-scheme $(APP) \
-  		-destination 'platform=OS X,arch=x86_64' \
+  		-destination 'platform=OS X,arch=arm64' \
   		-configuration Release archive \
   		-archivePath $(BUILD_PATH)/$(APP).xcarchive
 
@@ -37,7 +37,7 @@ notarize:
 	osascript -e 'display notification "Submitting app for notarization..." with title "Build the Stats"'
 	echo "Submitting app for notarization..."
 
-	xcrun notarytool submit --keychain-profile "AC_PASSWORD" --wait $(ZIP_PATH)
+	xcrun notarytool submit --keychain-profile "notarytool-profile" --wait $(ZIP_PATH)
 
 	echo "Stats successfully notarized"
 
@@ -91,10 +91,10 @@ next-version:
 	/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $$versionNumber" "$(PWD)/Stats/Supporting Files/Info.plist" ;\
 
 check:
-	xcrun notarytool log 2d0045cc-8f0d-4f4c-ba6f-728895fd064a --keychain-profile "AC_PASSWORD"
+	xcrun notarytool log 2d0045cc-8f0d-4f4c-ba6f-728895fd064a --keychain-profile "notarytool-profile"
 
 history:
-	xcrun notarytool history --keychain-profile "AC_PASSWORD"
+	xcrun notarytool history --keychain-profile "notarytool-profile"
 
 open:
 	osascript -e 'display notification "Stats signed and ready for distribution" with title "Build the Stats"'
