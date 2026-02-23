@@ -165,7 +165,7 @@ public let ReaderUpdateIntervals: [KeyValue_t] = [
     KeyValue_t(key: "30", value: "30 sec"),
     KeyValue_t(key: "60", value: "60 sec")
 ]
-public let NumbersOfProcesses: [Int] = [0, 3, 5, 8, 10, 15]
+public let NumbersOfProcesses: [Int] = [0, 3, 5, 8, 10, 15, 30, 50, 75, 100, 150]
 
 public let NetworkReaders: [KeyValue_t] = [
     KeyValue_t(key: "interface", value: "Interface based"),
