@@ -1,5 +1,5 @@
 ## This fork just adds the ability to show more than 15 processes in the CPU & RAM list in the menu dialog.
-I tried to get this merged but was rejected, hence this tiny fork.
+I tried to get this merged but my PR was closed without any reason provided, hence this tiny fork.
 
 ## Why Stats is better than using the activity monitor to view stats:
 I find this app much better than the activity monitor because it combines the ram usage from all processes related to an app together so it's easier to understand what's causing issues.
