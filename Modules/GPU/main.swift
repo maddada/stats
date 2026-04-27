@@ -40,6 +40,8 @@ public struct GPU_Info: Codable {
     public var utilization: Double? = nil
     public var renderUtilization: Double? = nil
     public var tilerUtilization: Double? = nil
+    public var aneUtilization: Double? = nil
+    public var fps: Double? = nil
     
     init(id: String, type: GPU_type, IOClass: String, vendor: String? = nil, model: String, cores: Int?, utilization: Double? = nil, render: Double? = nil, tiler: Double? = nil) {
         self.id = id
@@ -63,7 +65,7 @@ public struct GPU_Info: Codable {
 }
 
 public class GPUs: Codable, RemoteType {
-    private var queue: DispatchQueue = DispatchQueue(label: "eu.exelban.Stats.GPU.SynchronizedArray")
+    private var queue: DispatchQueue = DispatchQueue(label: "com.madda.Stats.GPU.SynchronizedArray")
     
     private var _list: [GPU_Info] = []
     public var list: [GPU_Info] {
@@ -109,6 +111,7 @@ public class GPU: Module {
     private let settingsView: Settings
     private let portalView: Portal
     private let notificationsView: Notifications
+    private let previewView: Preview
     
     private var infoReader: InfoReader? = nil
     
@@ -129,13 +132,15 @@ public class GPU: Module {
         self.settingsView = Settings(.GPU)
         self.portalView = Portal(.GPU)
         self.notificationsView = Notifications(.GPU)
+        self.previewView = Preview(.GPU)
         
         super.init(
             moduleType: .GPU,
             popup: self.popupView,
             settings: self.settingsView,
             portal: self.portalView,
-            notifications: self.notificationsView
+            notifications: self.notificationsView,
+            preview: self.previewView,
         )
         guard self.available else { return }
         
@@ -177,6 +182,7 @@ public class GPU: Module {
         
         self.portalView.callback(selectedGPU)
         self.notificationsView.usageCallback(utilization)
+        self.previewView.loadCallback(selectedGPU)
         
         self.menuBar.widgets.filter{ $0.isActive }.forEach { (w: SWidget) in
             switch w.item {
@@ -187,7 +193,7 @@ public class GPU: Module {
             case let widget as BarChart: widget.setValue([[ColorValue(utilization)]])
             case let widget as Tachometer:
                 widget.setValue([
-                    circle_segment(value: utilization, color: NSColor.systemBlue)
+                    ColorValue(utilization, color: NSColor.systemBlue)
                 ])
             default: break
             }

@@ -30,6 +30,7 @@ extension CWPHYMode: @retroactive CustomStringConvertible {
         case .mode11g:  return "802.11g"
         case .mode11n:  return "802.11n"
         case .mode11ax: return "802.11ax"
+        case .mode11be: return "802.11be"
         case .modeNone: return "none"
         @unknown default: return "unknown"
         }
@@ -145,6 +146,8 @@ internal class UsageReader: Reader<Network_Usage>, CWEventDelegate {
     }
     
     private let wifiClient = CWWiFiClient.shared()
+    
+    private var lastDetailsReadTS: Date = .distantPast
     
     public override func setup() {
         self.reachability.reachable = {
@@ -321,6 +324,9 @@ internal class UsageReader: Reader<Network_Usage>, CWEventDelegate {
     public func getDetails() {
         guard self.interfaceID != "" else { return }
         
+        let now = Date()
+        if now.timeIntervalSince(self.lastDetailsReadTS) < 15 { return }
+        
         for interface in SCNetworkInterfaceCopyAll() as NSArray {
             if let bsdName = SCNetworkInterfaceGetBSDName(interface as! SCNetworkInterface), bsdName as String == self.interfaceID,
                let type = SCNetworkInterfaceGetInterfaceType(interface as! SCNetworkInterface),
@@ -362,6 +368,8 @@ internal class UsageReader: Reader<Network_Usage>, CWEventDelegate {
         if self.usage.connectionType == .wifi && self.usage.wifiDetails.ssid == nil || self.usage.wifiDetails.ssid == "" {
             self.getWiFiDetails()
         }
+        
+        self.lastDetailsReadTS = Date()
     }
     
     private func getWiFiDetails() {
@@ -472,14 +480,12 @@ internal class UsageReader: Reader<Network_Usage>, CWEventDelegate {
     }
     
     private func getBytesInfo(_ pointer: UnsafeMutablePointer<ifaddrs>) -> (upload: Int64, download: Int64)? {
-        let addr = pointer.pointee.ifa_addr.pointee
-        
-        guard addr.sa_family == UInt8(AF_LINK) else {
+        guard let addrPtr = pointer.pointee.ifa_addr, addrPtr.pointee.sa_family == UInt8(AF_LINK) else {
             return nil
         }
-        
-        let data: UnsafeMutablePointer<if_data>? = unsafeBitCast(pointer.pointee.ifa_data, to: UnsafeMutablePointer<if_data>.self)
-        return (upload: Int64(data?.pointee.ifi_obytes ?? 0), download: Int64(data?.pointee.ifi_ibytes ?? 0))
+        guard let raw = pointer.pointee.ifa_data else { return nil }
+        let data = raw.assumingMemoryBound(to: if_data.self)
+        return (upload: Int64(data.pointee.ifi_obytes), download: Int64(data.pointee.ifi_ibytes))
     }
     
     private func isIPv4(_ ip: String) -> Bool {
@@ -696,12 +702,25 @@ internal class ConnectivityReader: Reader<Network_Connectivity> {
     private let identifier = UInt16.random(in: 0..<UInt16.max)
     private var fingerprint: UUID = UUID()
     
-    private var host: String {
+    private var ICMPHost: String {
         Store.shared.string(key: "Network_ICMPHost", defaultValue: "1.1.1.1")
     }
+    private var HTTPHost: String {
+        Store.shared.string(key: "Network_HTTPHost", defaultValue: "https://google.com")
+    }
+    
     private var lastHost: String = ""
     private var addr: Data? = nil
     private let timeout: TimeInterval = 5
+    
+    public enum ConnectivityMode: String {
+        case icmp
+        case http
+    }
+    
+    private var connectivityMode: ConnectivityMode {
+        ConnectivityMode(rawValue: Store.shared.string(key: "Network_connectivityMode", defaultValue: "icmp")) ?? .icmp
+    }
     
     private var socket: CFSocket?
     private var socketSource: CFRunLoopSource?
@@ -786,18 +805,77 @@ internal class ConnectivityReader: Reader<Network_Connectivity> {
     }
     
     override func read() {
-        guard !self.host.isEmpty else {
-            if self.socket != nil {
-                self.closeConn()
+        if self.connectivityMode == .http {
+            self.httpCheck()
+        } else {
+            guard !self.ICMPHost.isEmpty else {
+                if self.socket != nil {
+                    self.closeConn()
+                }
+                return
             }
+            
+            self.icmpCheck()
+        }
+        
+        if let v = self.status {
+            self.wrapper.status = v
+            if let l = self.latency {
+                self.wrapper.latency = l
+            }
+            if let j = self.jitter {
+                self.wrapper.jitter = j
+            }
+            self.callback(self.wrapper)
+        }
+    }
+    
+    private func httpCheck() {
+        guard !self.isPinging else { return }
+        self.isPinging = true
+        
+        let urlString = self.HTTPHost.hasPrefix("http://") || self.HTTPHost.hasPrefix("https://") ? self.HTTPHost : "https://\(self.HTTPHost)"
+        guard let url = URL(string: urlString) else {
+            self.status = false
+            self.isPinging = false
             return
         }
         
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: self.timeout)
+        request.httpMethod = "HEAD"
+        
+        let startTime = DispatchTime.now()
+        let task = URLSession.shared.dataTask(with: request) { _, response, error in
+            let endTime = DispatchTime.now()
+            let elapsed = Double(endTime.uptimeNanoseconds - startTime.uptimeNanoseconds) / 1_000_000
+            
+            self.latency = elapsed
+            if let prev = self.previousLatency {
+                let d = abs(elapsed - prev)
+                if self.jitter == nil {
+                    self.jitter = d
+                } else {
+                    self.jitter! += (d - self.jitter!) / 16.0
+                }
+            }
+            self.previousLatency = elapsed
+            
+            if let http = response as? HTTPURLResponse {
+                self.status = (200...399).contains(http.statusCode) && error == nil
+            } else {
+                self.status = false
+            }
+            self.isPinging = false
+        }
+        task.resume()
+    }
+    
+    private func icmpCheck() {
         if self.socket == nil {
             self.prepare()
         }
         
-        if self.lastHost != self.host {
+        if self.lastHost != self.ICMPHost {
             self.addr = self.resolve()
         }
         
@@ -812,17 +890,6 @@ internal class ConnectivityReader: Reader<Network_Connectivity> {
         let error = CFSocketSendData(socket, addr as CFData, data as CFData, self.timeout)
         if error != .success {
             self.socketCallback(data: nil, error: error)
-        }
-        
-        if let v = self.status {
-            self.wrapper.status = v
-            if let l = self.latency {
-                self.wrapper.latency = l
-            }
-            if let j = self.jitter {
-                self.wrapper.jitter = j
-            }
-            self.callback(self.wrapper)
         }
     }
     
@@ -966,9 +1033,9 @@ internal class ConnectivityReader: Reader<Network_Connectivity> {
     }
     
     private func resolve() -> Data? {
-        self.lastHost = self.host
+        self.lastHost = self.ICMPHost
         var streamError = CFStreamError()
-        let cfhost = CFHostCreateWithName(nil, self.host as CFString).takeRetainedValue()
+        let cfhost = CFHostCreateWithName(nil, self.ICMPHost as CFString).takeRetainedValue()
         let status = CFHostStartInfoResolution(cfhost, .addresses, &streamError)
         guard status else { return nil }
         var success: DarwinBoolean = false

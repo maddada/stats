@@ -71,6 +71,7 @@
 "Logarithmic" = "Logarithmisch";
 "Fixed scale" = "Fest";
 "Cores" = "Kerne";
+"Core" = "Kern"; // translategemma:4b
 "Settings" = "Einstellungen";
 "Name" = "Name";
 "Format" = "Format";
@@ -177,6 +178,7 @@
 "Number of threads" = "%0 Threads";
 "Number of e-cores" = "%0 Effizienzkerne";
 "Number of p-cores" = "%0 Leistungskerne";
+"Number of s-cores" = "%0 Super-Prozessoren"; // translategemma:4b
 "Disks" = "Festplatten";
 "Display" = "Bildschirm";
 
@@ -189,7 +191,7 @@
 // Widgets
 "Color" = "Farbe";
 "Label" = "Beschriftung";
-"Box" = "Box";
+"Box" = "Karton"; // translategemma:4b
 "Frame" = "Rahmen";
 "Value" = "Wert";
 "Colorize" = "Einfärben";
@@ -210,7 +212,7 @@
 "Stack widget" = "Stapel";
 "Memory widget" = "Speicher";
 "Static width" = "Feste Breite";
-"Tachometer widget" = "Tachometer";
+"Tachometer widget" = "Drehzahlmesser"; // translategemma:4b
 "State widget" = "Status-Widget";
 "Text widget" = "Text-Widget";
 "Battery details widget" = "Batteriedetails-Widget";
@@ -237,7 +239,7 @@
 "Pictogram" = "Piktogramm";
 "Module" = "Modul";
 "Widgets" = "Widgets";
-"Popup" = "Popup";
+"Popup" = "Pop-up"; // translategemma:4b
 "Notifications" = "Benachrichtigungen";
 "Merge widgets" = "Widgets zusammenführen";
 "No available widgets to configure" = "Keine Widgets zum Konfigurieren verfügbar";
@@ -255,6 +257,7 @@
 "Main chart scaling" = "Hauptdiagramm-Skalierung";
 "Scale value" = "Skalierungswert";
 "Text widget value" = "Text-Widget-Wert";
+"Combined processes" = "Kombinierte Prozesse"; // translategemma:4b
 
 // CPU
 "CPU usage" = "CPU-Auslastung";
@@ -288,6 +291,10 @@
 "Efficiency cores load" = "Effizienzkerne-Last";
 "Performance cores load" = "Leistungskerne-Last";
 "All cores" = "Alle Kerne";
+"Load per core" = "Laden pro Kern"; // translategemma:4b
+"Efficiency core" = "Kern der Effizienz"; // translategemma:4b
+"Performance core" = "Leistungszentrum"; // translategemma:4b
+"Super core" = "Hervorragende Kernfunktion"; // translategemma:4b
 
 // GPU
 "GPU to show" = "Anzuzeigende GPU";
@@ -373,8 +380,8 @@
 "Sensor to show" = "Anzuzeigender Sensor";
 
 // Network
-"Uploading" = "Upload";
-"Downloading" = "Download";
+"Uploading" = "Hochladen"; // translategemma:4b
+"Downloading" = "Herunterladen"; // translategemma:4b
 "Public IP" = "Öffentliche IP";
 "Local IP" = "Lokale IP";
 "Interface" = "Schnittstelle";
@@ -402,7 +409,7 @@
 "Internet connection" = "Internetverbindung";
 "Active state color" = "Farbe für aktiven Zustand";
 "Nonactive state color" = "Farbe für inaktiven Zustand";
-"Connectivity host (ICMP)" = "Verbindungshost (ICMP)";
+"Connectivity host" = "Verbindungshost";
 "Leave empty to disable the check" = "Leer lassen, um die Prüfung zu deaktivieren";
 "Connectivity history" = "Verbindungsverlauf";
 "Auto-refresh public IP address" = "Öffentliche IP-Adresse automatisch aktualisieren";
@@ -412,8 +419,8 @@
 "Network activity" = "Netzwerkaktivität";
 "Last reset" = "Letzte Zurücksetzung vor %0";
 "Latency" = "Latenz";
-"Upload speed" = "Upload";
-"Download speed" = "Download";
+"Upload speed" = "Hochladen"; // translategemma:4b
+"Download speed" = "Herunterladen"; // translategemma:4b
 "Address" = "Adresse";
 "WiFi network" = "WLAN-Netzwerk";
 "Local IP changed" = "Lokale IP hat sich geändert";
@@ -422,6 +429,7 @@
 "New IP" = "Neue IP: %0";
 "Internet connection lost" = "Internetverbindung unterbrochen";
 "Internet connection established" = "Internetverbindung hergestellt";
+"Show country code instead of emoji" = "Zeige den Landescode anstelle des Emojis"; // translategemma:4b
 
 // Battery
 "Level" = "Ladezustand";
@@ -471,11 +479,12 @@
 "Time zone" = "Zeitzone";
 "Local" = "Lokal";
 "Calendar" = "Kalender";
-"Show week numbers" = "Show week numbers";
+"Show week numbers" = "Zeige die Wochennummern"; // translategemma:4b
 "Local time" = "Ortszeit";
 "Add new clock" = "Neue Uhr hinzufügen";
 "Delete selected clock" = "Ausgewählte Uhr löschen";
 "Help with datetime format" = "Hilfe zum Datums-/Zeitformat";
+"Sync with NTP server" = "Synchronisieren mit NTP-Server"; // translategemma:4b
 
 // Colors
 "Based on utilization" = "Nach Auslastung";

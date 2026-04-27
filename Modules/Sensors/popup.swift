@@ -84,7 +84,7 @@ internal class Popup: PopupWrapper {
     @objc private func checkFanModesAndResetFtst() {
         let fanViews = self.list.values.compactMap { $0 as? FanView }
         guard !fanViews.isEmpty else { return }
-        guard fanViews.allSatisfy({ $0.fan.mode == .automatic }) else { return }
+        guard fanViews.allSatisfy({ $0.fan.mode.isAutomatic }) else { return }
         SMCHelper.shared.resetFanControl()
     }
     #endif
@@ -159,7 +159,7 @@ internal class Popup: PopupWrapper {
             }
             
             if !reload {
-                let section = PreferencesSection(label: localizedString(typ.rawValue))
+                let section = PreferencesSection(title: localizedString(typ.rawValue))
                 section.identifier = NSUserInterfaceItemIdentifier("sensor")
                 groups.forEach { (group: SensorGroup) in
                     filtered.filter{ $0.group == group }.forEach { (s: Sensor_p) in
@@ -430,8 +430,10 @@ internal class ValueSensorView: NSStackView {
 
 internal class ChartSensorView: NSStackView {
     private var chart: LineChartView? = nil
-    
+    private var currentSuffix: String
+
     public init(width: CGFloat, suffix: String) {
+        self.currentSuffix = suffix
         super.init(frame: NSRect(x: 0, y: 0, width: width, height: 60))
         
         self.wantsLayer = true
@@ -442,7 +444,7 @@ internal class ChartSensorView: NSStackView {
         self.layer?.cornerRadius = 3
         
         self.chart = LineChartView(frame: NSRect(x: 0, y: 0, width: self.frame.width, height: self.frame.height), num: 120, scale: .linear)
-        self.chart?.suffix = suffix
+        self.chart?.setSuffix(suffix)
         
         if let view = self.chart {
             self.addArrangedSubview(view)
@@ -459,10 +461,12 @@ internal class ChartSensorView: NSStackView {
     }
     
     public func update(_ value: Double, _ suffix: String) {
-        if self.chart?.suffix != suffix {
-            self.chart?.suffix = suffix
+        guard let chart = self.chart else { return }
+        if self.currentSuffix != suffix {
+            self.currentSuffix = suffix
+            chart.setSuffix(suffix)
         }
-        self.chart?.addValue(value/100)
+        chart.addValue(value/100)
     }
 }
 
@@ -485,7 +489,7 @@ internal class FanView: NSStackView {
     private var modeButtons: ModeButtons? = nil
     private var debouncer: DispatchWorkItem? = nil
     
-    private var barView: NSView? = nil
+    private var barView: BarChartView? = nil
     
     private var minBtn: NSButton? = nil
     private var maxBtn: NSButton? = nil
@@ -593,28 +597,18 @@ internal class FanView: NSStackView {
         valueField.stringValue = self.fanValue == .percentage ? "\(self.fan.percentage)%" : self.fan.formattedValue
         valueField.toolTip = "\(value)"
         
-        let bar: NSView = NSView(frame: NSRect(x: 0, y: 0, width: 80, height: 8))
-        bar.widthAnchor.constraint(equalToConstant: bar.bounds.width).isActive = true
-        bar.heightAnchor.constraint(equalToConstant: bar.bounds.height).isActive = true
-        bar.wantsLayer = true
-        bar.layer?.backgroundColor = NSColor.textBackgroundColor.cgColor
-        bar.layer?.borderColor = NSColor.quaternaryLabelColor.cgColor
-        bar.layer?.borderWidth = 1
-        bar.layer?.cornerRadius = 2
-        
-        let width: CGFloat = (bar.frame.width * CGFloat(self.fan.percentage < 0 ? 0 : self.fan.percentage)) / 100
-        let barInner = NSView(frame: NSRect(x: 0, y: 0, width: width, height: bar.frame.height))
-        barInner.wantsLayer = true
-        barInner.layer?.backgroundColor = NSColor.controlAccentColor.cgColor
-        
-        bar.addSubview(barInner)
+        let bar = BarChartView(frame: NSRect(x: 0, y: 0, width: 80, height: 8), horizontal: true)
+        bar.widthAnchor.constraint(equalToConstant: 80).isActive = true
+        bar.heightAnchor.constraint(equalToConstant: 8).isActive = true
+        let percentage = self.fan.percentage < 0 ? 0 : self.fan.percentage
+        bar.setValue(ColorValue(Double(percentage) / 100))
         
         row.addArrangedSubview(nameField)
         row.addArrangedSubview(bar)
         row.addArrangedSubview(valueField)
         
         self.valueField = valueField
-        self.barView = barInner
+        self.barView = bar
         
         self.addArrangedSubview(row)
     }
@@ -855,7 +849,7 @@ internal class FanView: NSStackView {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
                     SMCHelper.shared.setFanMode(self.fan.id, mode: mode.rawValue)
                     self.modeButtons?.setMode(mode)
-                    if mode != .automatic {
+                    if !mode.isAutomatic {
                         self.setSpeed(value: speed, then: {
                             DispatchQueue.main.async {
                                 self.sliderValueField?.textColor = .systemBlue
@@ -868,7 +862,7 @@ internal class FanView: NSStackView {
             self.willSleepSpeed = nil
         }
         
-        if let value = self.fan.customSpeed, self.fan.mode != .automatic {
+        if let value = self.fan.customSpeed, !self.fan.mode.isAutomatic {
             self.setSpeed(value: value, then: {
                 DispatchQueue.main.async {
                     self.sliderValueField?.textColor = .systemBlue
@@ -878,9 +872,9 @@ internal class FanView: NSStackView {
     }
     
     @objc private func sleepListener(aNotification: NSNotification) {
-        guard SMCHelper.shared.isActive() && self.fan.customMode != .automatic else { return }
+        guard SMCHelper.shared.isActive(), let mode = self.fan.customMode, !mode.isAutomatic else { return }
         
-        self.willSleepMode = self.fan.customMode
+        self.willSleepMode = mode
         self.willSleepSpeed = self.fan.customSpeed
         SMCHelper.shared.setFanMode(fan.id, mode: FanMode.automatic.rawValue)
         self.modeButtons?.setMode(.automatic)
@@ -921,11 +915,11 @@ internal class FanView: NSStackView {
                 self.valueField?.toolTip = value.formattedValue
                 
                 if let v = self.barView {
-                    let width: CGFloat = (80 * CGFloat(value.percentage < 0 ? 0 : value.percentage)) / 100
-                    v.setFrameSize(NSSize(width: width, height: v.frame.height))
+                    let percentage = value.percentage < 0 ? 0 : value.percentage
+                    v.setValue(ColorValue(Double(percentage) / 100))
                 }
                 
-                if self.resetModeAfterSleep && value.mode != .automatic {
+                if self.resetModeAfterSleep && !value.mode.isAutomatic {
                     if self.sliderValueField?.stringValue != "" && self.slider?.doubleValue != value.value {
                         self.slider?.doubleValue = value.value
                         self.sliderValueField?.stringValue = ""
@@ -1031,7 +1025,7 @@ private class ModeButtons: NSStackView {
         self.autoBtn.setButtonType(.toggle)
         self.autoBtn.isBordered = false
         self.autoBtn.target = self
-        self.autoBtn.state = mode == .automatic ? .on : .off
+        self.autoBtn.state = mode.isAutomatic ? .on : .off
         
         self.manualBtn.setButtonType(.toggle)
         self.manualBtn.isBordered = false
@@ -1180,7 +1174,7 @@ private class ModeButtons: NSStackView {
     }
     
     public func setMode(_ mode: FanMode) {
-        if mode == .automatic {
+        if mode.isAutomatic {
             self.autoBtn.state = .on
             self.manualBtn.state = .off
             self.offBtn.state = .off

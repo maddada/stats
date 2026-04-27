@@ -99,6 +99,18 @@
 			<key>Order</key>
 			<integer>7</integer>
 		</dict>
+		<key>state</key>
+		<dict>
+			<key>Default</key>
+			<false/>
+			<key>Order</key>
+			<integer>8</integer>
+			<key>Preview</key>
+			<dict>
+				<key>Value</key>
+				<true/>
+			</dict>
+		</dict>
 	</dict>
 	<key>Settings</key>
 	<dict>
@@ -106,6 +118,11 @@
 		<true/>
 		<key>notifications</key>
 		<true/>
+	</dict>
+	<key>Preview</key>
+	<dict>
+		<key>available</key>
+		<false/>
 	</dict>
 </dict>
 </plist>

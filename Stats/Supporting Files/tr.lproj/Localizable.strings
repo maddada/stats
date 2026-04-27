@@ -52,7 +52,7 @@
 "Long" = "Uzun";
 "Statistics" = "İstatistik";
 "Max" = "Maks";
-"Min" = "Min";
+"Min" = "Minimum"; // translategemma:4b
 "Reset" = "Sıfırla";
 "Alignment" = "Hizalama";
 "Left alignment" = "Sola hizalı";
@@ -71,9 +71,10 @@
 "Logarithmic" = "Logaritmik";
 "Fixed scale" = "Belirli ölçek";
 "Cores" = "Çekirdekler";
+"Core" = "Temel"; // translategemma:4b
 "Settings" = "Ayarlar";
 "Name" = "Ad";
-"Format" = "Format";
+"Format" = "Biçim";
 "Turn off" = "Kapat";
 "Normal" = "Normal";
 "Warning" = "Uyarı";
@@ -177,6 +178,7 @@
 "Number of threads" = "%0 iş parçacığı";
 "Number of e-cores" = "%0 verimlilik çekirdeği";
 "Number of p-cores" = "%0 performans çekirdeği";
+"Number of s-cores" = "%0 üst seviye çekirdekler"; // translategemma:4b
 "Disks" = "Diskler";
 "Display" = "Ekran";
 
@@ -255,6 +257,7 @@
 "Main chart scaling" = "Ana çizelge ölçeklendirmesi";
 "Scale value" = "Ölçekleme değeri";
 "Text widget value" = "Metin widget'ı değeri";
+"Combined processes" = "Birleştirilmiş süreçler"; // translategemma:4b
 
 // CPU
 "CPU usage" = "CPU kullanımı";
@@ -288,6 +291,10 @@
 "Efficiency cores load" = "Verimlilik çekirdekleri yükü";
 "Performance cores load" = "Performans çekirdekleri yükü";
 "All cores" = "Tüm çekirdekler";
+"Load per core" = "Her çekirdeğe göre yüklenme"; // translategemma:4b
+"Efficiency core" = "Temel performans"; // translategemma:4b
+"Performance core" = "Performans çekirdeği"; // translategemma:4b
+"Super core" = "Olağanüstü performans"; // translategemma:4b
 
 // GPU
 "GPU to show" = "Gösterilecek GPU";
@@ -402,7 +409,7 @@
 "Internet connection" = "Internet bağlantısı";
 "Active state color" = "Etkin durum rengi";
 "Nonactive state color" = "Etkin olmayan durum rengi";
-"Connectivity host (ICMP)" = "Bağlantı sunucusu (ICMP)";
+"Connectivity host" = "Bağlantı sunucusu";
 "Leave empty to disable the check" = "Kontrolü devre dışı bırakmak için boş bırakın";
 "Connectivity history" = "Bağlantı geçmişi";
 "Auto-refresh public IP address" = "Açık IP adresi oto-yenile";
@@ -422,6 +429,7 @@
 "New IP" = "Yeni IP: %0";
 "Internet connection lost" = "İnternet bağlantısı kesildi";
 "Internet connection established" = "İnternet bağlantısı kuruldu";
+"Show country code instead of emoji" = "Emoji yerine ülke kodunu gösterin"; // translategemma:4b
 
 // Battery
 "Level" = "Doluluk";
@@ -451,7 +459,7 @@
 "Percentage" = "Yüzde";
 "Percentage and time" = "Yüzde ve zaman";
 "Time and percentage" = "Zaman ve yüzde";
-"Time format" = "Zaman formatı";
+"Time format" = "Zaman biçimi";
 "Hide additional information when full" = "Pil dolduğunda ek bilgileri gizle";
 "Last charge" = "Son şarj";
 "Capacity" = "Kapasite";
@@ -461,7 +469,7 @@
 "Colorize battery" = "Pili renklendir";
 "Charging current" = "Şarj akımı";
 "Charging Voltage" = "Şarj Voltajı";
-"Charger state inside the battery" = "Charger state inside the battery";
+"Charger state inside the battery" = "Pil içindeki şarj cihazının durumu";
 
 // Bluetooth
 "Battery to show" = "Gösterilecek pil";
@@ -471,11 +479,12 @@
 "Time zone" = "Saat dilimi";
 "Local" = "Yerel";
 "Calendar" = "Takvim";
-"Show week numbers" = "Show week numbers";
+"Show week numbers" = "Hafta numaralarını göster"; // translategemma:4b
 "Local time" = "Yerel zaman";
 "Add new clock" = "Yeni saat ekle";
 "Delete selected clock" = "Seçili saati sil";
 "Help with datetime format" = "Tarih-saat biçimiyle ilgili yardım";
+"Sync with NTP server" = "NTP sunucusuyla senkronize ol"; // translategemma:4b
 
 // Colors
 "Based on utilization" = "Kullanıma dayalı";

@@ -41,8 +41,8 @@ public class Tachometer: WidgetWrapper {
         
         if preview {
             self.chart.setSegments([
-                circle_segment(value: 0.20, color: NSColor.systemRed),
-                circle_segment(value: 0.57, color: NSColor.systemBlue)
+                ColorValue(0.20, color: NSColor.systemRed),
+                ColorValue(0.57, color: NSColor.systemBlue)
             ])
         } else {
             self.labelState = Store.shared.bool(key: "\(self.title)_\(self.type.rawValue)_label", defaultValue: self.labelState)
@@ -65,18 +65,20 @@ public class Tachometer: WidgetWrapper {
         self.addSubview(self.labelView!)
         self.addSubview(self.chart)
         
-        self.chart.setFrame(NSRect(x: x, y: 0, width: self.frame.size.height, height: self.frame.size.height))
+        self.chart.frame = NSRect(x: x, y: 0, width: self.frame.size.height, height: self.frame.size.height)
         
         self.setFrameSize(NSSize(width: self.size + x, height: self.frame.size.height))
         self.setWidth(self.size + x)
     }
     
-    public func setValue(_ list: [circle_segment]) {
+    public func setValue(_ list: [ColorValue]) {
         var segments = list
         
         if self.monochromeState {
             for i in 0..<segments.count {
-                segments[i].color = segments[i].color.grayscaled()
+                if let color = segments[i].color {
+                    segments[i].color = color.grayscaled()
+                }
             }
         }
         

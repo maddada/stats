@@ -58,6 +58,9 @@ public struct drive: Codable {
         if usedSpace < 0 {
             usedSpace = 0
         }
+        if total == 0 {
+            return 0
+        }
         return Double(usedSpace) / Double(total)
     }
     
@@ -71,7 +74,7 @@ public struct drive: Codable {
 }
 
 public class Disks: Codable, RemoteType {
-    private var queue: DispatchQueue = DispatchQueue(label: "eu.exelban.Stats.Disk.SynchronizedArray")
+    private var queue: DispatchQueue = DispatchQueue(label: "com.madda.Stats.Disk.SynchronizedArray")
     private var _array: [drive] = []
     public var array: [drive] {
         get { self.queue.sync { self._array } }
@@ -95,9 +98,7 @@ public class Disks: Codable, RemoteType {
     init() {}
     
     public var count: Int {
-        var result = 0
-        self.queue.sync { result = self.array.count }
-        return result
+        self.queue.sync { self._array.count }
     }
     
     // swiftlint:disable empty_count
@@ -116,6 +117,10 @@ public class Disks: Codable, RemoteType {
     
     public func map<ElementOfResult>(_ transform: (drive) -> ElementOfResult?) -> [ElementOfResult] {
         return self.array.compactMap(transform)
+    }
+    
+    public func filter(where isIncluded: (drive) -> Bool) -> [drive] {
+        return self.array.filter(isIncluded)
     }
     
     public func reversed() -> [drive] {
@@ -162,8 +167,9 @@ public class Disks: Codable, RemoteType {
     }
     
     public func remote() -> Data? {
-        var string = "\(self.array.count),"
-        for (i, v) in self.array.enumerated() {
+        let arr = self.array.filter({ !$0.removable })
+        var string = "\(arr.count),"
+        for (i, v) in arr.enumerated() {
             string += v.remote()
             if i != self.array.count {
                 string += ","
@@ -210,6 +216,7 @@ public class Disk: Module {
     private let settingsView: Settings = Settings(.disk)
     private let portalView: Portal = Portal(.disk)
     private let notificationsView: Notifications = Notifications(.disk)
+    private let previewView: Preview = Preview(.disk)
     
     private var capacityReader: CapacityReader?
     private var activityReader: ActivityReader?
@@ -231,7 +238,8 @@ public class Disk: Module {
             popup: self.popupView,
             settings: self.settingsView,
             portal: self.portalView,
-            notifications: self.notificationsView
+            notifications: self.notificationsView,
+            preview: self.previewView
         )
         guard self.available else { return }
         
@@ -283,6 +291,7 @@ public class Disk: Module {
         
         DispatchQueue.main.async(execute: {
             self.popupView.capacityCallback(value)
+            self.previewView.capacityCallback(value)
         })
         self.settingsView.setList(value)
         
@@ -301,7 +310,7 @@ public class Disk: Module {
                 widget.setValue((DiskSize(d.free).getReadableMemory(), DiskSize(d.size - d.free).getReadableMemory()), usedPercentage: d.percentage)
             case let widget as PieChart:
                 widget.setValue([
-                    circle_segment(value: d.percentage, color: NSColor.systemBlue)
+                    ColorValue(d.percentage, color: NSColor.systemBlue)
                 ])
             case let widget as TextWidget:
                 var text = "\(self.textValue)"
@@ -319,10 +328,14 @@ public class Disk: Module {
                         }
                     case "$percentage":
                         var percentage: Int
-                        switch pair.value {
-                        case "used": percentage = Int((Double(d.size - d.free) / Double(d.size)) * 100)
-                        case "free": percentage = Int((Double(d.free) / Double(d.size)) * 100)
-                        default: return
+                        if d.size == 0 {
+                            percentage = 0
+                        } else {
+                            switch pair.value {
+                            case "used": percentage = Int((Double(d.size - d.free) / Double(d.size)) * 100)
+                            case "free": percentage = Int((Double(d.free) / Double(d.size)) * 100)
+                            default: return
+                            }
                         }
                         replacement = "\(percentage < 0 ? 0 : percentage)%"
                     default: return
@@ -352,6 +365,7 @@ public class Disk: Module {
         
         DispatchQueue.main.async(execute: {
             self.popupView.activityCallback(value)
+            self.previewView.activityCallback(value)
         })
         
         guard let d = value.first(where: { $0.mediaName == self.selectedDisk }) ?? value.first(where: { $0.root }) else {

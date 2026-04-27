@@ -82,6 +82,7 @@ private class GPUView: NSStackView {
     private var utilizationChart: LineChartView? = nil
     private var renderUtilizationChart: LineChartView? = nil
     private var tilerUtilizationChart: LineChartView? = nil
+    private var aneUtilizationChart: LineChartView? = nil
     
     public var sizeCallback: (() -> Void)
     
@@ -180,6 +181,7 @@ private class GPUView: NSStackView {
         self.addStats(id: "GPU utilization", self.value.utilization)
         self.addStats(id: "Render utilization", self.value.renderUtilization)
         self.addStats(id: "Tiler utilization", self.value.tilerUtilization)
+        self.addStats(id: "ANE utilization", self.value.aneUtilization)
         
         container.addArrangedSubview(circles)
         container.addArrangedSubview(charts)
@@ -198,13 +200,13 @@ private class GPUView: NSStackView {
     private func addStats(id: String, _ val: Double? = nil) {
         guard let value = val else { return }
         
-        var circle: HalfCircleGraphView
+        var circle: PieChartView
         var chart: LineChartView
         
-        if let view = self.circleRow?.arrangedSubviews.filter({ $0 is HalfCircleGraphView }).first(where: { ($0 as! HalfCircleGraphView).id == id }) {
-            circle = view as! HalfCircleGraphView
+        if let view = self.circleRow?.arrangedSubviews.filter({ $0 is PieChartView }).first(where: { ($0 as! PieChartView).id == id }) {
+            circle = view as! PieChartView
         } else {
-            circle = HalfCircleGraphView(frame: NSRect(x: 0, y: 0, width: circleSize, height: circleSize))
+            circle = PieChartView(frame: NSRect(x: 0, y: 0, width: circleSize, height: circleSize), openCircle: true)
             circle.id = id
             circle.toolTip = localizedString(id)
             if let row = self.circleRow {
@@ -219,7 +221,7 @@ private class GPUView: NSStackView {
             chart = view as! LineChartView
         } else {
             chart = LineChartView(frame: NSRect(x: 0, y: 0, width: 100, height: self.chartSize), num: 120)
-            chart.isTooltipEnabled = false
+            chart.setTooltipEnabled(false)
             chart.wantsLayer = true
             chart.layer?.backgroundColor = NSColor.lightGray.withAlphaComponent(0.1).cgColor
             chart.layer?.cornerRadius = 3
@@ -243,7 +245,7 @@ private class GPUView: NSStackView {
             circle.setValue(value)
             circle.setText(temperature(value))
             circle.toolTip = "\(localizedString(id)): \(temperature(value))"
-            chart.suffix = UnitTemperature.current.symbol
+            chart.setSuffix(UnitTemperature.current.symbol)
             
             if self.temperatureChart == nil {
                 self.temperatureChart = chart
@@ -272,6 +274,14 @@ private class GPUView: NSStackView {
             if self.tilerUtilizationChart == nil {
                 self.tilerUtilizationChart = chart
             }
+        } else if id == "ANE utilization" {
+            circle.setValue(value)
+            circle.setText("\(Int(value*100))%")
+            circle.toolTip = "\(localizedString(id)): \(Int(value*100))%"
+            
+            if self.aneUtilizationChart == nil {
+                self.aneUtilizationChart = chart
+            }
         }
     }
     
@@ -286,6 +296,7 @@ private class GPUView: NSStackView {
             self.addStats(id: "GPU utilization", gpu.utilization)
             self.addStats(id: "Render utilization", gpu.renderUtilization)
             self.addStats(id: "Tiler utilization", gpu.tilerUtilization)
+            self.addStats(id: "ANE utilization", gpu.aneUtilization)
         }
         
         if let value = gpu.temperature {
@@ -303,6 +314,9 @@ private class GPUView: NSStackView {
         }
         if let value = gpu.tilerUtilization {
             self.tilerUtilizationChart?.addValue(value)
+        }
+        if let value = gpu.aneUtilization {
+            self.aneUtilizationChart?.addValue(value)
         }
     }
     
@@ -330,6 +344,8 @@ private class GPUDetails: NSView {
     private var utilization: NSTextField? = nil
     private var renderUtilization: NSTextField? = nil
     private var tilerUtilization: NSTextField? = nil
+    private var aneUtilization: NSTextField? = nil
+    private var fps: NSTextField? = nil
     
     open override var intrinsicContentSize: CGSize {
         return CGSize(width: self.bounds.width, height: self.bounds.height)
@@ -410,6 +426,18 @@ private class GPUDetails: NSView {
             grid.addRow(with: arr)
             num += 1
         }
+        if let value = value.aneUtilization {
+            let arr = keyValueRow("\(localizedString("ANE utilization")):", "\(Int(value*100))%")
+            self.aneUtilization = arr.last
+            grid.addRow(with: arr)
+            num += 1
+        }
+        if let value = value.fps {
+            let arr = keyValueRow("\(localizedString("FPS")):", "\(Int(value.rounded()))")
+            self.fps = arr.last
+            grid.addRow(with: arr)
+            num += 1
+        }
         
         self.setFrameSize(NSSize(width: self.frame.width, height: (16 * num) + Constants.Popup.margins))
         grid.setFrameSize(NSSize(width: grid.frame.width, height: self.frame.height - Constants.Popup.margins))
@@ -451,6 +479,12 @@ private class GPUDetails: NSView {
         }
         if let value = gpu.tilerUtilization {
             self.tilerUtilization?.stringValue = "\(Int(value*100))%"
+        }
+        if let value = gpu.aneUtilization {
+            self.aneUtilization?.stringValue = "\(Int(value*100))%"
+        }
+        if let value = gpu.fps {
+            self.fps?.stringValue = "\(Int(value.rounded()))"
         }
     }
 }

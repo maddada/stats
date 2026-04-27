@@ -14,10 +14,12 @@ import Kit
 
 public extension NSToolbarItem.Identifier {
     static let toggleButton = NSToolbarItem.Identifier("toggleButton")
+    static let previewButton = NSToolbarItem.Identifier("previewButton")
 }
 
 class SettingsWindow: NSWindow, NSWindowDelegate, NSToolbarDelegate {
-    static let size: CGSize = CGSize(width: 720, height: 480)
+    private static let size: CGSize = CGSize(width: 720, height: 480)
+    private static let frameAutosaveName = "com.madda.Stats.Settings.WindowFrame"
     
     private let mainView: MainView = MainView(frame: NSRect(x: 0, y: 0, width: 540, height: 480))
     private let sidebarView: SidebarView = SidebarView(frame: NSRect(x: 0, y: 0, width: 180, height: 480))
@@ -27,10 +29,9 @@ class SettingsWindow: NSWindow, NSWindowDelegate, NSToolbarDelegate {
     
     private var toggleButton: NSControl? = nil
     private var activeModuleName: String? = nil
+    private var settingsPreviewButton: NSView? = nil
     
-    private var pauseState: Bool {
-        Store.shared.bool(key: "pause", defaultValue: false)
-    }
+    private var pauseState: Bool { Store.shared.bool(key: "pause", defaultValue: false) }
     
     init() {
         super.init(
@@ -40,7 +41,7 @@ class SettingsWindow: NSWindow, NSWindowDelegate, NSToolbarDelegate {
                 width: SettingsWindow.size.width,
                 height: SettingsWindow.size.height
             ),
-            styleMask: [.closable, .titled, .miniaturizable, .fullSizeContentView],
+            styleMask: [.closable, .titled, .miniaturizable, .fullSizeContentView, .resizable],
             backing: .buffered,
             defer: false
         )
@@ -61,7 +62,9 @@ class SettingsWindow: NSWindow, NSWindowDelegate, NSToolbarDelegate {
         sidebarViewController.addSplitViewItem(sidebarItem)
         sidebarViewController.addSplitViewItem(contentItem)
         
-        let newToolbar = NSToolbar(identifier: "eu.exelban.Stats.Settings.Toolbar")
+        contentItem.minimumThickness = 540
+        
+        let newToolbar = NSToolbar(identifier: "com.madda.Stats.Settings.Toolbar")
         newToolbar.allowsUserCustomization = false
         newToolbar.autosavesConfiguration = true
         newToolbar.displayMode = .default
@@ -74,19 +77,17 @@ class SettingsWindow: NSWindow, NSWindowDelegate, NSToolbarDelegate {
         if #unavailable(macOS 26.0) {
             self.backgroundColor = .clear
         }
-        self.positionCenter()
+        self.isRestorable = true
+        self.setFrameAutosaveName(SettingsWindow.frameAutosaveName)
+        if !self.setFrameUsingName(SettingsWindow.frameAutosaveName) {
+            self.positionCenter()
+        }
         self.setIsVisible(false)
+        self.minSize = NSSize(width: SettingsWindow.size.width, height: SettingsWindow.size.height-Constants.Popup.headerHeight)
         
         let windowController = NSWindowController()
         windowController.window = self
         windowController.loadWindow()
-        
-        NSLayoutConstraint.activate([
-            self.mainView.widthAnchor.constraint(equalToConstant: 540),
-            self.mainView.container.widthAnchor.constraint(equalToConstant: 540),
-            self.mainView.container.topAnchor.constraint(equalTo: (self.contentLayoutGuide as! NSLayoutGuide).topAnchor),
-            self.mainView.container.bottomAnchor.constraint(equalTo: (self.contentLayoutGuide as! NSLayoutGuide).bottomAnchor)
-        ])
         
         NotificationCenter.default.addObserver(self, selector: #selector(menuCallback), name: .openModuleSettings, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(toggleSettingsHandler), name: .toggleSettings, object: nil)
@@ -120,31 +121,29 @@ class SettingsWindow: NSWindow, NSWindowDelegate, NSToolbarDelegate {
     
     func toolbar(_ toolbar: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar flag: Bool) -> NSToolbarItem? {
         switch itemIdentifier {
-        case .toggleButton:
-            var toggleBtn: NSControl = NSControl()
-            if #available(OSX 10.15, *) {
-                let switchButton = NSSwitch()
-                switchButton.state = .on
-                switchButton.action = #selector(self.toggleEnable)
-                switchButton.target = self
-                switchButton.controlSize = .small
-                toggleBtn = switchButton
-            } else {
-                let button: NSButton = NSButton()
-                button.setButtonType(.switch)
-                button.state = .on
-                button.title = ""
-                button.action = #selector(self.toggleEnable)
-                button.isBordered = false
-                button.isTransparent = false
-                button.target = self
-                toggleBtn = button
+        case .previewButton:
+            let button = SettingsPreviewButton { [weak self] in
+                guard let moduleName = self?.activeModuleName else { return }
+                NotificationCenter.default.post(name: .togglePreview, object: nil, userInfo: ["module": moduleName])
             }
-            self.toggleButton = toggleBtn
+            self.settingsPreviewButton = button
+            
+            let toolbarItem = NSToolbarItem(itemIdentifier: itemIdentifier)
+            toolbarItem.view = button
+            toolbarItem.isBordered = false
+            
+            return toolbarItem
+        case .toggleButton:
+            let switchButton = NSSwitch()
+            switchButton.state = .on
+            switchButton.action = #selector(self.toggleEnable)
+            switchButton.target = self
+            switchButton.controlSize = .small
+            self.toggleButton = switchButton
             
             let toolbarItem = NSToolbarItem(itemIdentifier: itemIdentifier)
             toolbarItem.toolTip = localizedString("Toggle the module")
-            toolbarItem.view = toggleBtn
+            toolbarItem.view = switchButton
             toolbarItem.isBordered = false
             
             return toolbarItem
@@ -154,10 +153,10 @@ class SettingsWindow: NSWindow, NSWindowDelegate, NSToolbarDelegate {
     }
     
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        return [.flexibleSpace, .toggleButton]
+        return [.flexibleSpace, .previewButton, .toggleButton]
     }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        return [.flexibleSpace, .toggleButton]
+        return [.flexibleSpace, .previewButton, .toggleButton]
     }
     
     @objc private func toggleSettingsHandler(_ notification: Notification) {
@@ -179,19 +178,25 @@ class SettingsWindow: NSWindow, NSWindowDelegate, NSToolbarDelegate {
         if let title = notification.userInfo?["module"] as? String {
             var view: NSView = NSView()
             if let detectedModule = modules.first(where: { $0.config.name == title }) {
-                if let v = detectedModule.settings {
+                if let v = detectedModule.window {
                     view = v
                 }
                 self.activeModuleName = detectedModule.config.name
                 toggleNSControlState(self.toggleButton, state: detectedModule.enabled ? .on : .off)
                 self.toggleButton?.isHidden = false
+                self.settingsPreviewButton?.isHidden = !detectedModule.config.hasPreview
+                NotificationCenter.default.post(name: .openWindow, object: nil, userInfo: ["module": detectedModule.config.name, "state": true])
             } else if title == "Dashboard" {
                 view = self.dashboard
                 self.toggleButton?.isHidden = true
+                self.settingsPreviewButton?.isHidden = true
+                NotificationCenter.default.post(name: .openWindow, object: nil, userInfo: ["state": false])
             } else if title == "Settings" {
                 self.settings.viewWillAppear()
                 view = self.settings
                 self.toggleButton?.isHidden = true
+                self.settingsPreviewButton?.isHidden = true
+                NotificationCenter.default.post(name: .openWindow, object: nil, userInfo: ["state": false])
             }
             
             self.title = localizedString(title)
@@ -232,22 +237,41 @@ class SettingsWindow: NSWindow, NSWindowDelegate, NSToolbarDelegate {
 // MARK: - MainView
 
 private class MainView: NSView {
-    fileprivate let container: NSStackView
+    fileprivate let container: NSStackView = NSStackView()
+    
+    private let background: NSVisualEffectView = {
+        let view = NSVisualEffectView(frame: NSRect.zero)
+        view.blendingMode = .withinWindow
+        view.material = .contentBackground
+        view.state = .active
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.setContentHuggingPriority(.defaultLow, for: .horizontal)
+        view.setContentHuggingPriority(.defaultLow, for: .vertical)
+        view.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        view.setContentCompressionResistancePriority(.defaultLow, for: .vertical)
+        return view
+    }()
     
     override init(frame: NSRect) {
-        self.container = NSStackView(frame: NSRect(x: 0, y: 0, width: frame.width, height: frame.height))
-        
-        let foreground = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: frame.width, height: frame.height))
-        foreground.blendingMode = .withinWindow
-        foreground.material = .windowBackground
-        foreground.state = .active
-        
         super.init(frame: NSRect.zero)
         
+        self.translatesAutoresizingMaskIntoConstraints = false
         self.container.translatesAutoresizingMaskIntoConstraints = false
         
-        self.addSubview(foreground, positioned: .below, relativeTo: .none)
+        self.addSubview(self.background, positioned: .below, relativeTo: .none)
         self.addSubview(self.container)
+        
+        NSLayoutConstraint.activate([
+            self.background.leadingAnchor.constraint(equalTo: leadingAnchor),
+            self.background.trailingAnchor.constraint(equalTo: trailingAnchor),
+            self.background.topAnchor.constraint(equalTo: topAnchor),
+            self.background.bottomAnchor.constraint(equalTo: bottomAnchor),
+            
+            self.container.leadingAnchor.constraint(equalTo: leadingAnchor),
+            self.container.trailingAnchor.constraint(equalTo: trailingAnchor),
+            self.container.topAnchor.constraint(equalTo: topAnchor, constant: Constants.Popup.headerHeight*1.4),
+            self.container.bottomAnchor.constraint(equalTo: bottomAnchor)
+        ])
     }
     
     required init?(coder: NSCoder) {
@@ -517,5 +541,65 @@ private class MenuItem: NSView {
         self.imageView?.contentTintColor = .labelColor
         self.titleView?.textColor = .labelColor
         self.active = false
+    }
+}
+
+private class SettingsPreviewButton: NSStackView {
+    private var callback: () -> Void
+    
+    private var settingsIcon: NSImage { iconFromSymbol(name: "gear", scale: .large) }
+    private var previewIcon: NSImage { iconFromSymbol(name: "command", scale: .large) }
+    
+    private var button: NSButton? = nil
+    private var isSettingsEnabled: Bool = false
+    
+    fileprivate init(callback: @escaping () -> Void) {
+        self.callback = callback
+        
+        super.init(frame: .zero)
+        
+        self.translatesAutoresizingMaskIntoConstraints = false
+        self.edgeInsets = NSEdgeInsets(
+            top: Constants.Settings.margin,
+            left: Constants.Settings.margin,
+            bottom: Constants.Settings.margin,
+            right: Constants.Settings.margin
+        )
+        self.spacing = Constants.Settings.margin
+        
+        let button = NSButton()
+        button.toolTip = localizedString("Open module settings")
+        button.bezelStyle = .regularSquare
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.imageScaling = .scaleNone
+        button.image = self.settingsIcon
+        button.contentTintColor = .secondaryLabelColor
+        button.isBordered = false
+        button.action = #selector(self.action)
+        button.target = self
+        button.focusRingType = .none
+        button.widthAnchor.constraint(equalToConstant: Constants.Widget.height).isActive = true
+        self.button = button
+        
+        self.addArrangedSubview(button)
+    }
+    
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+    
+    @objc private func action() {
+        guard let button = self.button else { return }
+        self.callback()
+        
+        self.isSettingsEnabled = !self.isSettingsEnabled
+        
+        if self.isSettingsEnabled {
+            button.image = self.previewIcon
+            button.toolTip = localizedString("Close module settings")
+        } else {
+            button.image = self.settingsIcon
+            button.toolTip = localizedString("Open module settings")
+        }
     }
 }

@@ -19,6 +19,8 @@ private struct bleDevice {
     var address: String
     var uuid: UUID?
     var batteryLevel: [KeyValue_t]
+    var vendorId: Int? = nil
+    var productId: Int? = nil
 }
 
 private struct ioDevice {
@@ -49,6 +51,7 @@ internal class DevicesReader: Reader<[BLEDevice]>, CBCentralManagerDelegate, CBP
         let hid = self.HIDDevices()
         let SPB = self.profilerDevices()
         var list = self.cacheDevices()
+        let pmsetLevels = self.pmsetAccessoryLevels()
         
         hid.forEach { v in
             if !list.contains(where: {$0.address == v.address}) {
@@ -85,7 +88,9 @@ internal class DevicesReader: Reader<[BLEDevice]>, CBCentralManagerDelegate, CBP
                 self.devices[idx].batteryLevel = data.batteryLevel
                 self.devices[idx].isPaired = device.isPaired
                 self.devices[idx].isConnected = device.isConnected
-                
+                if self.devices[idx].vendorId == nil { self.devices[idx].vendorId = data.vendorId }
+                if self.devices[idx].productId == nil { self.devices[idx].productId = data.productId }
+
                 return
             }
             
@@ -96,7 +101,9 @@ internal class DevicesReader: Reader<[BLEDevice]>, CBCentralManagerDelegate, CBP
                 RSSI: rssi,
                 batteryLevel: data.batteryLevel,
                 isConnected: device.isConnected,
-                isPaired: device.isPaired
+                isPaired: device.isPaired,
+                vendorId: data.vendorId,
+                productId: data.productId
             ))
         }
         
@@ -142,6 +149,45 @@ internal class DevicesReader: Reader<[BLEDevice]>, CBCentralManagerDelegate, CBP
             self.devices = self.devices.filter({ !SPB.1.contains($0.address) })
         }
         
+        pmsetLevels.forEach { p in
+            let pmsetName = (p.name ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+                .lowercased()
+            
+            if !pmsetName.isEmpty,
+               let idx = self.devices.firstIndex(where: {
+                   let deviceName = $0.name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+                   return deviceName == pmsetName || deviceName.contains(pmsetName) || pmsetName.contains(deviceName)
+               }) {
+                if !p.batteryLevel.isEmpty {
+                    self.devices[idx].batteryLevel = p.batteryLevel
+                }
+                return
+            }
+            
+            if let pVendor = p.vendorId, let pProduct = p.productId,
+               let idx = self.devices.firstIndex(where: {
+                   $0.vendorId == pVendor && $0.productId == pProduct
+               }) {
+                if !p.batteryLevel.isEmpty {
+                    self.devices[idx].batteryLevel = p.batteryLevel
+                }
+                return
+            }
+            
+            self.devices.append(BLEDevice(
+                address: p.address,
+                name: p.name ?? "",
+                uuid: p.uuid,
+                RSSI: 100,
+                batteryLevel: p.batteryLevel,
+                isConnected: true,
+                isPaired: false,
+                vendorId: p.vendorId,
+                productId: p.productId
+            ))
+        }
+        
         self.callback(self.devices.filter({ $0.RSSI != nil }))
     }
     
@@ -167,7 +213,9 @@ internal class DevicesReader: Reader<[BLEDevice]>, CBCentralManagerDelegate, CBP
                 address = addr
             }
             
-            list.append(bleDevice(name: name, address: address, uuid: nil, batteryLevel: [KeyValue_t(key: "battery", value: "\(batteryPercent)")]))
+            let vendorId = d.object(forKey: "VendorID") as? Int
+            let productId = d.object(forKey: "ProductID") as? Int
+            list.append(bleDevice(name: name, address: address, uuid: nil, batteryLevel: [KeyValue_t(key: "battery", value: "\(batteryPercent)")], vendorId: vendorId, productId: productId))
         }
         
         return list
@@ -329,5 +377,129 @@ internal class DevicesReader: Reader<[BLEDevice]>, CBCentralManagerDelegate, CBP
         if let batteryLevel = characteristic.value?[0] {
             self.bleLevels[peripheral.identifier] = KeyValue_t(key: "battery", value: "\(batteryLevel)")
         }
+    }
+    
+    // MARK: - PMSET data
+    private func pmsetAccessoryLevels() -> [bleDevice] {
+        guard let res = process(path: "/usr/bin/pmset", arguments: ["-g", "accps", "-xml"]) else { return [] }
+        
+        let plists = res.components(separatedBy: "<?xml")
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .compactMap { chunk -> [String: Any]? in
+                let xml = "<?xml" + chunk
+                guard let data = xml.data(using: .utf8),
+                      let plist = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any] else {
+                    return nil
+                }
+                return plist
+            }
+        
+        struct PmsetEntry {
+            let name: String
+            let capacity: Int
+            let accessoryIdentifier: String
+            let partIdentifier: String?
+            let groupIdentifier: String?
+            let category: String?
+            let isCharging: Bool
+            let vendorId: Int?
+            let productId: Int?
+            let combinedParts: [[String: Any]]?
+        }
+        
+        var entries: [PmsetEntry] = []
+        for dict in plists {
+            guard let name = dict["Name"] as? String,
+                  let capacity = dict["Current Capacity"] as? Int,
+                  let accessoryId = dict["Accessory Identifier"] as? String else { continue }
+            
+            let isCharging: Bool
+            if let charging = dict["Is Charging"] as? Bool {
+                isCharging = charging
+            } else if let state = dict["Power Source State"] as? String {
+                isCharging = state == "AC Power"
+            } else {
+                isCharging = false
+            }
+            
+            entries.append(PmsetEntry(
+                name: name,
+                capacity: capacity,
+                accessoryIdentifier: accessoryId,
+                partIdentifier: dict["Part Identifier"] as? String,
+                groupIdentifier: dict["Group Identifier"] as? String,
+                category: dict["Accessory Category"] as? String,
+                isCharging: isCharging,
+                vendorId: dict["Vendor ID"] as? Int,
+                productId: dict["Product ID"] as? Int,
+                combinedParts: dict["Combined Parts"] as? [[String: Any]]
+            ))
+        }
+        
+        var grouped: [String: [PmsetEntry]] = [:]
+        var standalone: [PmsetEntry] = []
+        for entry in entries {
+            if let groupId = entry.groupIdentifier {
+                grouped[groupId, default: []].append(entry)
+            } else {
+                standalone.append(entry)
+            }
+        }
+        
+        var out: [bleDevice] = []
+        
+        for entry in standalone {
+            let state = entry.isCharging ? "charging" : "discharging"
+            out.append(bleDevice(
+                name: entry.name,
+                address: entry.accessoryIdentifier,
+                uuid: nil,
+                batteryLevel: [KeyValue_t(key: "battery", value: "\(entry.capacity)", additional: state)],
+                vendorId: entry.vendorId,
+                productId: entry.productId
+            ))
+        }
+        
+        for (_, group) in grouped {
+            let combinedEntry = group.first(where: { $0.partIdentifier == "Combined" })
+            let caseEntry = group.first(where: { $0.partIdentifier == "Case" || $0.category == "Audio Battery Case" })
+            let displayName = combinedEntry?.name ?? group.first(where: { !($0.category ?? "").contains("Case") })?.name ?? group.first?.name ?? ""
+            let accessoryId = combinedEntry?.accessoryIdentifier ?? group.first?.accessoryIdentifier ?? ""
+            
+            var kv: [KeyValue_t] = []
+            
+            if let c = caseEntry {
+                let state = c.isCharging ? "charging" : "discharging"
+                kv.append(KeyValue_t(key: "case", value: "\(c.capacity)", additional: state))
+            }
+            
+            if let parts = combinedEntry?.combinedParts {
+                for part in parts {
+                    guard let partId = part["Part Identifier"] as? String,
+                          let cap = part["Current Capacity"] as? Int else { continue }
+                    let charging = (part["Is Charging"] as? Bool) ?? false
+                    let state = charging ? "charging" : "discharging"
+                    kv.append(KeyValue_t(key: partId.lowercased(), value: "\(cap)", additional: state))
+                }
+            }
+            
+            if kv.isEmpty, let e = combinedEntry ?? group.first {
+                let state = e.isCharging ? "charging" : "discharging"
+                kv.append(KeyValue_t(key: "battery", value: "\(e.capacity)", additional: state))
+            }
+            
+            let vendorId = combinedEntry?.vendorId ?? group.first?.vendorId
+            let productId = combinedEntry?.productId ?? group.first?.productId
+            out.append(bleDevice(
+                name: displayName,
+                address: accessoryId,
+                uuid: nil,
+                batteryLevel: kv,
+                vendorId: vendorId,
+                productId: productId
+            ))
+        }
+        
+        return out
     }
 }

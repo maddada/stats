@@ -15,6 +15,8 @@ import Carbon
 extension String: @retroactive LocalizedError {
     public var errorDescription: String? { return self }
     
+    public var nilIfEmpty: String? { self.isEmpty ? nil : self }
+    
     public var digits: String {
         return components(separatedBy: CharacterSet.decimalDigits.inverted).joined()
     }
@@ -98,21 +100,6 @@ extension String: @retroactive LocalizedError {
     
     func removingWhitespaces() -> String {
         return components(separatedBy: .whitespaces).joined()
-    }
-}
-
-public extension DispatchSource.MemoryPressureEvent {
-    func pressureColor() -> NSColor {
-        switch self {
-        case .normal:
-            return NSColor.systemGreen
-        case .warning:
-            return NSColor.systemYellow
-        case .critical:
-            return NSColor.systemRed
-        default:
-            return .controlAccentColor
-        }
     }
 }
 

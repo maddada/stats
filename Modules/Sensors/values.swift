@@ -53,7 +53,7 @@ public protocol Sensor_p {
 }
 
 public class Sensors_List: Codable {
-    private var queue: DispatchQueue = DispatchQueue(label: "eu.exelban.Stats.Sensors.SynchronizedArray", attributes: .concurrent)
+    private var queue: DispatchQueue = DispatchQueue(label: "com.madda.Stats.Sensors.SynchronizedArray", attributes: .concurrent)
     
     private var list: [Sensor_p] = []
     public var sensors: [Sensor_p] {
@@ -465,8 +465,37 @@ internal let SensorsList: [Sensor] = [
     Sensor(key: "Tm1p", name: "Memory Proximity 2", group: .sensor, type: .temperature, platforms: Platform.m4Gen),
     Sensor(key: "Tm2p", name: "Memory Proximity 3", group: .sensor, type: .temperature, platforms: Platform.m4Gen),
     
-    // Apple Silicon
+    // M5
+    Sensor(key: "Tp00", name: "CPU super core 1", group: .CPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tp04", name: "CPU super core 2", group: .CPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tp08", name: "CPU super core 3", group: .CPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tp0C", name: "CPU super core 4", group: .CPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tp0G", name: "CPU super core 5", group: .CPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tp0K", name: "CPU super core 6", group: .CPU, type: .temperature, platforms: Platform.m5Gen, average: true),
     
+    Sensor(key: "Tp0O", name: "CPU performance core 1", group: .CPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tp0R", name: "CPU performance core 2", group: .CPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tp0U", name: "CPU performance core 3", group: .CPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tp0X", name: "CPU performance core 4", group: .CPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tp0a", name: "CPU performance core 5", group: .CPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tp0d", name: "CPU performance core 6", group: .CPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tp0g", name: "CPU performance core 7", group: .CPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tp0j", name: "CPU performance core 8", group: .CPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tp0m", name: "CPU performance core 9", group: .CPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tp0p", name: "CPU performance core 10", group: .CPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tp0u", name: "CPU performance core 11", group: .CPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tp0y", name: "CPU performance core 12", group: .CPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    
+    Sensor(key: "Tg0U", name: "GPU 1", group: .GPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tg0X", name: "GPU 2", group: .GPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tg0d", name: "GPU 3", group: .GPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tg0g", name: "GPU 4", group: .GPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tg0j", name: "GPU 5", group: .GPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tg1Y", name: "GPU 6", group: .GPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tg1c", name: "GPU 7", group: .GPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    Sensor(key: "Tg1g", name: "GPU 8", group: .GPU, type: .temperature, platforms: Platform.m5Gen, average: true),
+    
+    // Apple Silicon
     Sensor(key: "TaLP", name: "Airflow left", group: .sensor, type: .temperature, platforms: Platform.apple),
     Sensor(key: "TaRF", name: "Airflow right", group: .sensor, type: .temperature, platforms: Platform.apple),
     

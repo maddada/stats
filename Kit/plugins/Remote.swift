@@ -12,6 +12,7 @@
 import Foundation
 import Cocoa
 import CoreAudio
+import Security
 
 public protocol RemoteType {
     func remote() -> Data?
@@ -54,27 +55,33 @@ public class Remote {
     private let log: NextLog
     private var mqtt: MQTTManager = MQTTManager()
     private var isConnecting = false
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        return URLSession(configuration: config)
+    }()
     
     private var lastSleepTime: Date?
     private var lastRegisterTime: Date?
+    fileprivate let cooldownLock = NSLock()
     
     struct Details: Codable {
         let client: Client
         let system: System
         let hardware: Hardware
     }
-
+    
     struct Client: Codable {
         let version: String
         let control: Bool
     }
-
+    
     struct OS: Codable {
         let name: String?
         let version: String?
         let build: String?
     }
-
+    
     struct System: Codable {
         let platform: String
         let vendor: String?
@@ -83,7 +90,7 @@ public class Remote {
         let os: OS
         let arch: String?
     }
-
+    
     struct Hardware: Codable {
         let cpu: cpu_s?
         let gpu: [gpu_s]?
@@ -94,12 +101,20 @@ public class Remote {
     public init() {
         self.log = NextLog.shared.copy(category: "Remote")
         
-        var id = UUID(uuidString: Store.shared.string(key: "remote_id", defaultValue: UUID().uuidString)) ?? UUID()
-        if Store.shared.exist(key: "telemetry_id") {
-            id = UUID(uuidString: Store.shared.string(key: "telemetry_id", defaultValue: UUID().uuidString)) ?? UUID()
+        let id: UUID
+        if Store.shared.exist(key: "remote_id"),
+           let existing = UUID(uuidString: Store.shared.string(key: "remote_id", defaultValue: "")) {
+            id = existing
+            if Store.shared.exist(key: "telemetry_id") {
+                Store.shared.remove("telemetry_id")
+            }
+        } else if Store.shared.exist(key: "telemetry_id"),
+                  let migrated = UUID(uuidString: Store.shared.string(key: "telemetry_id", defaultValue: "")) {
+            id = migrated
+            Store.shared.set(key: "remote_id", value: id.uuidString)
             Store.shared.remove("telemetry_id")
-        }
-        if !Store.shared.exist(key: "remote_id") {
+        } else {
+            id = UUID()
             Store.shared.set(key: "remote_id", value: id.uuidString)
         }
         self.id = id
@@ -186,11 +201,14 @@ public class Remote {
     private func registerDevice() {
         let oneHour: TimeInterval = 3600
         let now = Date()
+        self.cooldownLock.lock()
         if let lastTime = self.lastRegisterTime, now.timeIntervalSince(lastTime) < oneHour {
+            self.cooldownLock.unlock()
             debug("Device registration skipped: cooldown period not met", log: self.log)
             return
         }
         self.lastRegisterTime = now
+        self.cooldownLock.unlock()
         
         guard let url = URL(string: "\(Remote.host)/remote/device") else { return }
         
@@ -235,7 +253,7 @@ public class Remote {
         guard let body = try? JSONEncoder().encode(payload) else { return }
         request.httpBody = body
         
-        URLSession.shared.dataTask(with: request) { data, response, _ in
+        self.session.dataTask(with: request) { data, response, _ in
             guard let httpResponse = response as? HTTPURLResponse else { return }
             if httpResponse.statusCode == 200 {
                 debug("Registered device: \(Remote.shared.id.uuidString)", log: self.log)
@@ -252,8 +270,10 @@ public class Remote {
         debug("received command '\(cmd)' with payload: \(String(data: payload ?? Data(), encoding: .utf8) ?? "")", log: self.log)
         
         switch cmd {
-        case "disable": self.disableControl()
-        case "sleep": self.sleep()
+        case "disable":
+            self.disableControl()
+        case "sleep":
+            self.sleep()
         case "volume":
             guard let payload else { return }
             let value = String(data: payload, encoding: .utf8)
@@ -279,12 +299,16 @@ public class Remote {
                 self.setSystemMute(true)
             case "unmute":
                 self.setSystemMute(false)
-            default: break
+            default: return
             }
-        default: break
+        default: return
         }
+        
+        self.mqtt.controlAck(cmd)
     }
 }
+
+// MARK: - Audio helpers
 
 extension Remote {
     func disableControl() {
@@ -294,19 +318,30 @@ extension Remote {
     func sleep() {
         let minInterval: TimeInterval = 300
         let now = Date()
+        self.cooldownLock.lock()
         if let last = self.lastSleepTime, now.timeIntervalSince(last) < minInterval {
+            self.cooldownLock.unlock()
             debug("Sleep command ignored due to cooldown", log: self.log)
             return
         }
         self.lastSleepTime = now
+        self.cooldownLock.unlock()
+        
         let process = Process()
-        process.launchPath = "/usr/bin/pmset"
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
         process.arguments = ["sleepnow"]
-        process.launch()
+        do {
+            try process.run()
+        } catch {
+            self.cooldownLock.lock()
+            self.lastSleepTime = nil
+            self.cooldownLock.unlock()
+            debug("Failed to invoke pmset sleepnow: \(error.localizedDescription)", log: self.log)
+        }
     }
     
-    func isSystemMuted() -> Bool {
-        var defaultOutputDeviceID = AudioDeviceID(0)
+    private func getDefaultOutputDevice() -> AudioDeviceID? {
+        var deviceID = AudioDeviceID(0)
         var propertyAddress = AudioObjectPropertyAddress(
             mSelector: kAudioHardwarePropertyDefaultOutputDevice,
             mScope: kAudioObjectPropertyScopeGlobal,
@@ -319,141 +354,74 @@ extension Remote {
             0,
             nil,
             &size,
-            &defaultOutputDeviceID
+            &deviceID
         )
-        guard status == noErr else { return false }
-
-        propertyAddress = AudioObjectPropertyAddress(
+        return status == noErr ? deviceID : nil
+    }
+    
+    func isSystemMuted() -> Bool {
+        guard let deviceID = self.getDefaultOutputDevice() else { return false }
+        
+        var propertyAddress = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyMute,
             mScope: kAudioDevicePropertyScopeOutput,
             mElement: 0
         )
         var muteValue: UInt32 = 0
-        size = UInt32(MemoryLayout<UInt32>.size)
-        let muteStatus = AudioObjectGetPropertyData(
-            defaultOutputDeviceID,
-            &propertyAddress,
-            0,
-            nil,
-            &size,
-            &muteValue
-        )
-        return muteStatus == noErr && muteValue == 1
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        let status = AudioObjectGetPropertyData(deviceID, &propertyAddress, 0, nil, &size, &muteValue)
+        return status == noErr && muteValue == 1
     }
     
     func setSystemMute(_ mute: Bool) {
-        var defaultOutputDeviceID = AudioDeviceID(0)
+        guard let deviceID = self.getDefaultOutputDevice() else { return }
+        
         var propertyAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        let status = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &propertyAddress,
-            0,
-            nil,
-            &size,
-            &defaultOutputDeviceID
-        )
-        guard status == noErr else { return }
-
-        propertyAddress = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyMute,
             mScope: kAudioDevicePropertyScopeOutput,
             mElement: 0
         )
         var muteValue: UInt32 = mute ? 1 : 0
-        AudioObjectSetPropertyData(
-            defaultOutputDeviceID,
-            &propertyAddress,
-            0,
-            nil,
-            UInt32(MemoryLayout<UInt32>.size),
-            &muteValue
-        )
+        AudioObjectSetPropertyData(deviceID, &propertyAddress, 0, nil, UInt32(MemoryLayout<UInt32>.size), &muteValue)
     }
     
     func getSystemVolume() -> Float32? {
-        var defaultOutputDeviceID = AudioDeviceID(0)
+        guard let deviceID = self.getDefaultOutputDevice() else { return nil }
+        
         var propertyAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        let status = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &propertyAddress,
-            0,
-            nil,
-            &size,
-            &defaultOutputDeviceID
-        )
-        guard status == noErr else { return nil }
-
-        propertyAddress = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyVolumeScalar,
             mScope: kAudioDevicePropertyScopeOutput,
             mElement: 0
         )
         var volume: Float32 = 0
-        size = UInt32(MemoryLayout<Float32>.size)
-        let volStatus = AudioObjectGetPropertyData(
-            defaultOutputDeviceID,
-            &propertyAddress,
-            0,
-            nil,
-            &size,
-            &volume
-        )
-        return volStatus == noErr ? volume : nil
+        var size = UInt32(MemoryLayout<Float32>.size)
+        let status = AudioObjectGetPropertyData(deviceID, &propertyAddress, 0, nil, &size, &volume)
+        return status == noErr ? volume : nil
     }
-
+    
     func setSystemVolume(_ volume: Float32) {
-        var defaultOutputDeviceID = AudioDeviceID(0)
+        guard let deviceID = self.getDefaultOutputDevice() else { return }
+        
         var propertyAddress = AudioObjectPropertyAddress(
-            mSelector: kAudioHardwarePropertyDefaultOutputDevice,
-            mScope: kAudioObjectPropertyScopeGlobal,
-            mElement: kAudioObjectPropertyElementMain
-        )
-        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
-        let status = AudioObjectGetPropertyData(
-            AudioObjectID(kAudioObjectSystemObject),
-            &propertyAddress,
-            0,
-            nil,
-            &size,
-            &defaultOutputDeviceID
-        )
-        guard status == noErr else { return }
-
-        propertyAddress = AudioObjectPropertyAddress(
             mSelector: kAudioDevicePropertyVolumeScalar,
             mScope: kAudioDevicePropertyScopeOutput,
             mElement: 0
         )
         var vol = max(0.0, min(1.0, volume))
-        AudioObjectSetPropertyData(
-            defaultOutputDeviceID,
-            &propertyAddress,
-            0,
-            nil,
-            UInt32(MemoryLayout<Float32>.size),
-            &vol
-        )
+        AudioObjectSetPropertyData(deviceID, &propertyAddress, 0, nil, UInt32(MemoryLayout<Float32>.size), &vol)
     }
 }
 
+// MARK: - Auth
+
 public class RemoteAuth {
     public var accessToken: String {
-        get { Store.shared.string(key: "access_token", defaultValue: "") }
-        set { Store.shared.set(key: "access_token", value: newValue) }
+        get { RemoteKeychain.read("access_token") ?? "" }
+        set { RemoteKeychain.write(newValue, for: "access_token") }
     }
     private var refreshToken: String {
-        get { Store.shared.string(key: "refresh_token", defaultValue: "") }
-        set { Store.shared.set(key: "refresh_token", value: newValue) }
+        get { RemoteKeychain.read("refresh_token") ?? "" }
+        set { RemoteKeychain.write(newValue, for: "refresh_token") }
     }
     private var clientID: String = "stats"
     
@@ -464,15 +432,38 @@ public class RemoteAuth {
     
     private var lastValidationTime: Date?
     private var validationAttempts: Int = 0
-    private let baseCooldown: TimeInterval = 2.0 // Start with 2 seconds
-    private let maxCooldown: TimeInterval = 60.0 // Max 60 seconds
+    private let baseCooldown: TimeInterval = 2.0
+    private let maxCooldown: TimeInterval = 60.0
+    private let cooldownLock = NSLock()
+    
+    private var isRefreshing = false
+    private var refreshCompletions: [(Bool?) -> Void] = []
+    private let refreshLock = NSLock()
+    
+    private let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 30
+        return URLSession(configuration: config)
+    }()
+    
+    private static let formAllowed: CharacterSet = CharacterSet(charactersIn:
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+    
+    private static func formBody(_ pairs: [(String, String)]) -> Data {
+        let body = pairs.map { key, value in
+            let k = key.addingPercentEncoding(withAllowedCharacters: formAllowed) ?? key
+            let v = value.addingPercentEncoding(withAllowedCharacters: formAllowed) ?? value
+            return "\(k)=\(v)"
+        }.joined(separator: "&")
+        return Data(body.utf8)
+    }
     
     public init() {
-        NotificationCenter.default.addObserver(self, selector: #selector(self.successLogin), name: .remoteLoginSuccess, object: nil)
+        RemoteKeychain.migrateFromUserDefaultsIfNeeded()
     }
     
     deinit {
-        NotificationCenter.default.removeObserver(self, name: .remoteLoginSuccess, object: nil)
+        self.session.invalidateAndCancel()
     }
     
     public func isAuthorized(completion: @escaping (Bool) -> Void) {
@@ -536,23 +527,25 @@ public class RemoteAuth {
         }
         
         let now = Date()
+        self.cooldownLock.lock()
         let dynamicCooldown = min(self.baseCooldown * pow(2.0, Double(self.validationAttempts)), self.maxCooldown)
         if let lastTime = self.lastValidationTime, now.timeIntervalSince(lastTime) < dynamicCooldown {
             let remainingTime = dynamicCooldown - now.timeIntervalSince(lastTime)
+            self.cooldownLock.unlock()
             DispatchQueue.main.asyncAfter(deadline: .now() + remainingTime) {
                 self.validate(completion)
             }
             return
         }
-        
         self.lastValidationTime = now
         self.validationAttempts += 1
+        self.cooldownLock.unlock()
         
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.setValue("Bearer \(self.accessToken)", forHTTPHeaderField: "Authorization")
         
-        URLSession.shared.dataTask(with: request) { [weak self] _, response, error in
+        self.session.dataTask(with: request) { [weak self] _, response, error in
             guard let self = self, error == nil, let httpResponse = response as? HTTPURLResponse else {
                 completion(false)
                 return
@@ -561,14 +554,18 @@ public class RemoteAuth {
             if httpResponse.statusCode == 401 {
                 self.refreshTokenFunc { ok in
                     if ok == true {
+                        self.cooldownLock.lock()
                         self.validationAttempts = 0
                         self.lastValidationTime = nil
+                        self.cooldownLock.unlock()
                     }
                     completion(ok ?? false)
                 }
             } else if httpResponse.statusCode == 200 {
+                self.cooldownLock.lock()
                 self.validationAttempts = 0
                 self.lastValidationTime = nil
+                self.cooldownLock.unlock()
                 completion(true)
             } else {
                 completion(false)
@@ -577,8 +574,17 @@ public class RemoteAuth {
     }
     
     private func refreshTokenFunc(completion: @escaping (Bool?) -> Void) {
+        self.refreshLock.lock()
+        self.refreshCompletions.append(completion)
+        if self.isRefreshing {
+            self.refreshLock.unlock()
+            return
+        }
+        self.isRefreshing = true
+        self.refreshLock.unlock()
+        
         guard let url = URL(string: "\(Remote.authHost)/token") else {
-            completion(nil)
+            self.completeRefresh(nil)
             return
         }
         
@@ -586,20 +592,33 @@ public class RemoteAuth {
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         
-        let body = "grant_type=refresh_token&refresh_token=\(self.refreshToken)"
-            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
-        request.httpBody = body?.data(using: .utf8)
+        request.httpBody = RemoteAuth.formBody([
+            ("grant_type", "refresh_token"),
+            ("refresh_token", self.refreshToken)
+        ])
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        self.session.dataTask(with: request) { [weak self] data, response, error in
+            guard let self else { return }
             guard error == nil, let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200,
                   let data = data, let token = try? JSONDecoder().decode(TokenResponse.self, from: data) else {
-                completion(nil)
+                self.completeRefresh(nil)
                 return
             }
             self.accessToken = token.access_token
             self.refreshToken = token.refresh_token
-            completion(true)
+            self.completeRefresh(true)
         }.resume()
+    }
+    
+    private func completeRefresh(_ result: Bool?) {
+        self.refreshLock.lock()
+        let completions = self.refreshCompletions
+        self.refreshCompletions.removeAll()
+        self.isRefreshing = false
+        self.refreshLock.unlock()
+        for completion in completions {
+            completion(result)
+        }
     }
     
     private func registerDevice(completion: @escaping (DeviceResponse?) -> Void) {
@@ -612,11 +631,11 @@ public class RemoteAuth {
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         
-        let body = "client_id=\(self.clientID)"
-            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
-        request.httpBody = body?.data(using: .utf8)
+        request.httpBody = RemoteAuth.formBody([
+            ("client_id", self.clientID)
+        ])
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        self.session.dataTask(with: request) { data, response, error in
             guard error == nil, let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200,
                   let data = data, let resp = try? JSONDecoder().decode(DeviceResponse.self, from: data) else {
                 completion(nil)
@@ -636,11 +655,13 @@ public class RemoteAuth {
         request.httpMethod = "POST"
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         
-        let body = "client_id=\(self.clientID)&device_code=\(self.deviceCode)&grant_type=urn:ietf:params:oauth:grant-type:device_code"
-            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed)
-        request.httpBody = body?.data(using: .utf8)
+        request.httpBody = RemoteAuth.formBody([
+            ("client_id", self.clientID),
+            ("device_code", self.deviceCode),
+            ("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
+        ])
         
-        URLSession.shared.dataTask(with: request) { data, response, error in
+        self.session.dataTask(with: request) { data, response, error in
             if let error = error {
                 completion(error)
                 return
@@ -659,10 +680,9 @@ public class RemoteAuth {
                 
                 do {
                     let result = try JSONDecoder().decode(TokenResponse.self, from: data)
-                    NotificationCenter.default.post(name: .remoteLoginSuccess, object: nil, userInfo: [
-                        "access_token": result.access_token,
-                        "refresh_token": result.refresh_token
-                    ])
+                    self.accessToken = result.access_token
+                    self.refreshToken = result.refresh_token
+                    NotificationCenter.default.post(name: .remoteLoginSuccess, object: nil)
                     completion(nil)
                 } catch {
                     completion(error)
@@ -678,9 +698,10 @@ public class RemoteAuth {
                 } else if responseString.contains("expired_token") {
                     completion(NSError(domain: "", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Device code expired, please re-register"]))
                 } else if responseString.contains("slow_down") {
-                    DispatchQueue.global().asyncAfter(deadline: .now() + Double(self.interval)) {
-                        completion(nil)
-                    }
+                    self.interval += 5
+                    self.repeater?.reset(seconds: self.interval)
+                    self.repeater?.start()
+                    completion(nil)
                 } else {
                     completion(NSError(domain: "", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: responseString]))
                 }
@@ -689,15 +710,6 @@ public class RemoteAuth {
                 completion(NSError(domain: "", code: httpResponse.statusCode, userInfo: [NSLocalizedDescriptionKey: "Failed to get token (\(httpResponse.statusCode)): \(errorMessage)"]))
             }
         }.resume()
-    }
-    
-    @objc private func successLogin(_ notification: Notification) {
-        guard let userInfo = notification.userInfo,
-            let accessToken = userInfo["access_token"] as? String,
-            let refreshToken = userInfo["refresh_token"] as? String else { return }
-        
-        self.accessToken = accessToken
-        self.refreshToken = refreshToken
     }
     
     private func isTokenExpired() -> Bool {
@@ -722,6 +734,8 @@ public class RemoteAuth {
         return Date().timeIntervalSince1970 >= exp
     }
 }
+
+// MARK: - MQTT
 
 struct MQTTMessage {
     let topic: String
@@ -750,11 +764,12 @@ class MQTTManager: NSObject {
     private var webSocket: URLSessionWebSocketTask?
     private var session: URLSession?
     private var isConnected = false
+    private var isConnecting = false
     private var isDisconnected = false
     private var isReconnecting = false
     private var reconnectAttempts = 0
     private var maxReconnectDelay: TimeInterval = 60.0
-    private var pingTimer: Timer?
+    private var pingTimer: DispatchSourceTimer?
     private var reachability: Reachability = Reachability(start: true)
     private let log: NextLog
     private var packetIdentifier: UInt16 = 1
@@ -766,12 +781,13 @@ class MQTTManager: NSObject {
         
         self.session = URLSession(configuration: .default, delegate: self, delegateQueue: .main)
         
-        self.reachability.reachable = {
+        self.reachability.reachable = { [weak self] in
             if Remote.shared.isAuthorized {
-                self.connect()
+                self?.connect()
             }
         }
-        self.reachability.unreachable = {
+        self.reachability.unreachable = { [weak self] in
+            guard let self else { return }
             if self.isConnected {
                 self.disconnect()
             }
@@ -779,18 +795,25 @@ class MQTTManager: NSObject {
     }
     
     public func connect() {
-        guard !self.isConnected else { return }
+        guard !self.isConnected && !self.isConnecting else { return }
+        self.isConnecting = true
         
         Remote.shared.auth.isAuthorized { [weak self] status in
             guard let self else { return }
             
             if status {
+                self.webSocket?.cancel(with: .normalClosure, reason: nil)
                 self.webSocket = self.session?.webSocketTask(with: Remote.brokerHost, protocols: ["mqtt"])
                 self.webSocket?.resume()
                 self.receiveMessage()
                 self.isDisconnected = false
                 debug("MQTT WebSocket connecting...", log: self.log)
             } else {
+                self.isConnecting = false
+                if Remote.shared.isAuthorized {
+                    Remote.shared.isAuthorized = false
+                    NotificationCenter.default.post(name: .remoteState, object: nil, userInfo: ["auth": false])
+                }
                 debug("Authorization failed, retrying connection...", log: self.log)
                 self.reconnect()
             }
@@ -800,6 +823,7 @@ class MQTTManager: NSObject {
     public func disconnect() {
         if self.webSocket == nil && !self.isConnected { return }
         self.isDisconnected = true
+        self.isConnecting = false
         
         self.sendStatus(false)
         self.sendDisconnect()
@@ -841,8 +865,7 @@ class MQTTManager: NSObject {
     public func sendStatus(_ value: Bool) {
         let status = value ? "online" : "offline"
         let topic = "stats/\(Remote.shared.id.uuidString)/status"
-        let payload = status.data(using: .utf8)
-        if let payload = payload {
+        if let payload = status.data(using: .utf8) {
             self.publish(topic: topic, data: payload)
         }
     }
@@ -870,10 +893,17 @@ class MQTTManager: NSObject {
         }
     }
     
-    public func publish(topic: String, data: Data) {
+    public func controlAck(_ cmd: String) {
+        let topic = "stats/\(Remote.shared.id.uuidString)/control-ack"
+        if let payload = cmd.data(using: .utf8) {
+            self.publish(topic: topic, data: payload)
+        }
+    }
+    
+    public func publish(topic: String, data: Data, retain: Bool = false) {
         guard self.isConnected else { return }
         
-        let publishPacket = createPublishPacket(topic: topic, payload: data)
+        let publishPacket = createPublishPacket(topic: topic, payload: data, retain: retain)
         self.webSocket?.send(.data(publishPacket)) { error in
             if let error = error {
                 print("Error publishing MQTT message: \(error)")
@@ -895,21 +925,18 @@ class MQTTManager: NSObject {
     private func createConnectPacket(username: String, password: String) -> Data {
         var packet = Data()
         
-        // Fixed header - packet type only (remaining length will be added later)
         let fixedHeaderByte = MQTTPacketType.connect.rawValue << 4
         
-        // Variable header
         var variableHeader = Data()
         variableHeader.append(contentsOf: encodeString("MQTT"))
         variableHeader.append(4)
         
-        var connectFlags: UInt8 = 0x00 // Clean session
-        connectFlags |= 0x80 // Username flag
-        connectFlags |= 0x40 // Password flag
+        var connectFlags: UInt8 = 0x00
+        connectFlags |= 0x80
+        connectFlags |= 0x40
         variableHeader.append(connectFlags)
         variableHeader.append(contentsOf: [0x03, 0x84])
         
-        // Payload
         var payload = Data()
         payload.append(contentsOf: encodeString("stats-\(username)"))
         payload.append(contentsOf: encodeString(username))
@@ -924,20 +951,16 @@ class MQTTManager: NSObject {
         return packet
     }
     
-    private func createPublishPacket(topic: String, payload: Data) -> Data {
+    private func createPublishPacket(topic: String, payload: Data, retain: Bool = false) -> Data {
         var packet = Data()
         
-        // Fixed header - packet type only
-        let fixedHeaderByte = (MQTTPacketType.publish.rawValue << 4) | 0x00 // QoS 0
+        let fixedHeaderByte = (MQTTPacketType.publish.rawValue << 4) | (retain ? 0x01 : 0x00)
         
-        // Variable header
         var variableHeader = Data()
         variableHeader.append(contentsOf: encodeString(topic))
         
-        // Calculate remaining length
         let remainingLength = variableHeader.count + payload.count
         
-        // Build final packet
         packet.append(fixedHeaderByte)
         packet.append(contentsOf: encodeRemainingLength(remainingLength))
         packet.append(variableHeader)
@@ -949,25 +972,19 @@ class MQTTManager: NSObject {
     private func createSubscribePacket(topic: String) -> Data {
         var packet = Data()
         
-        // Fixed header - packet type only
         let fixedHeaderByte = (MQTTPacketType.subscribe.rawValue << 4) | 0x02
         
-        // Variable header
         var variableHeader = Data()
         
-        // Packet identifier
         let packetId = self.getNextPacketId()
         variableHeader.append(contentsOf: [UInt8(packetId >> 8), UInt8(packetId & 0xFF)])
         
-        // Payload
         var payload = Data()
         payload.append(contentsOf: encodeString(topic))
-        payload.append(0x00) // QoS 0
+        payload.append(0x00)
         
-        // Calculate remaining length
         let remainingLength = variableHeader.count + payload.count
         
-        // Build final packet
         packet.append(fixedHeaderByte)
         packet.append(contentsOf: encodeRemainingLength(remainingLength))
         packet.append(variableHeader)
@@ -1028,6 +1045,8 @@ class MQTTManager: NSObject {
     private func handleConnAck(_ data: Data) {
         guard data.count >= 4 else { return }
         
+        self.isConnecting = false
+        
         let returnCode = data[3]
         if returnCode == 0 {
             self.isConnected = true
@@ -1053,6 +1072,7 @@ class MQTTManager: NSObject {
             switch result {
             case .failure(let error):
                 self?.isConnected = false
+                self?.isConnecting = false
                 self?.handleWebSocketError(error)
             case .success(let message):
                 switch message {
@@ -1070,13 +1090,17 @@ class MQTTManager: NSObject {
     
     private func startPingTimer() {
         self.stopPingTimer()
-        self.pingTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+        let timer = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+        timer.schedule(deadline: .now() + 450, repeating: 450)
+        timer.setEventHandler { [weak self] in
             self?.sendPingRequest()
         }
+        timer.resume()
+        self.pingTimer = timer
     }
     
     private func stopPingTimer() {
-        self.pingTimer?.invalidate()
+        self.pingTimer?.cancel()
         self.pingTimer = nil
     }
     
@@ -1090,7 +1114,8 @@ class MQTTManager: NSObject {
     
     private func handlePublish(_ data: Data) {
         var offset = 1
-        while data[offset] & 0x80 != 0 { offset += 1 }
+        while offset < data.count && data[offset] & 0x80 != 0 { offset += 1 }
+        guard offset < data.count else { return }
         offset += 1
         
         guard data.count > offset + 1 else { return }
@@ -1099,16 +1124,20 @@ class MQTTManager: NSObject {
         
         guard data.count >= offset + topicLength else { return }
         let topicData = data.subdata(in: offset..<(offset + topicLength))
-        let topic = String(data: topicData, encoding: .utf8) ?? "<invalid topic>"
+        guard let topic = String(data: topicData, encoding: .utf8) else { return }
         offset += topicLength
-  
-        if topic.hasSuffix("unregister") {
+        
+        let base = "stats/\(Remote.shared.id.uuidString)/"
+        if topic == base + "unregister" {
+            self.publish(topic: topic, data: Data(), retain: true)
             self.unregisterHandler?()
             return
         }
         
-        let prefix = "stats/\(Remote.shared.id.uuidString)/control/"
-        let commandName = topic.hasPrefix(prefix) ? String(topic.dropFirst(prefix.count)) : topic
+        let controlPrefix = base + "control/"
+        guard topic.hasPrefix(controlPrefix) else { return }
+        let commandName = String(topic.dropFirst(controlPrefix.count))
+        guard !commandName.isEmpty, !commandName.contains("/") else { return }
         let payload = data.subdata(in: offset..<data.count)
         self.commandCallback?(commandName, payload)
     }
@@ -1121,22 +1150,88 @@ extension MQTTManager: URLSessionWebSocketDelegate {
     }
     
     func urlSession(_ session: URLSession, webSocketTask: URLSessionWebSocketTask, didCloseWith closeCode: URLSessionWebSocketTask.CloseCode, reason: Data?) {
-        self.isConnected = false
         self.stopPingTimer()
         self.sendStatus(false)
+        self.isConnected = false
+        self.isConnecting = false
         debug("MQTT WebSocket closed", log: self.log)
         self.reconnect()
     }
     
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard task === self.webSocket else { return }
         if let error = error {
             if let response = task.response as? HTTPURLResponse {
-                let statusCode = response.statusCode
-                let headers = response.allHeaderFields
-                debug("MQTT WebSocket failed: \(error.localizedDescription), status: \(statusCode), headers: \(headers)", log: self.log)
+                debug("MQTT WebSocket failed: \(error.localizedDescription), status: \(response.statusCode)", log: self.log)
             } else {
                 debug("MQTT WebSocket failed: \(error.localizedDescription)", log: self.log)
             }
         }
+        self.stopPingTimer()
+        self.isConnected = false
+        self.isConnecting = false
+        if !self.isDisconnected {
+            self.reconnect()
+        }
+    }
+}
+
+// MARK: - Keychain
+
+enum RemoteKeychain {
+    private static let service: String = (Bundle.main.bundleIdentifier ?? "com.madda.Stats") + ".remote"
+    
+    static func read(_ key: String) -> String? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key,
+            kSecReturnData as String: true,
+            kSecMatchLimit as String: kSecMatchLimitOne
+        ]
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        guard status == errSecSuccess, let data = item as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+    
+    static func write(_ value: String, for key: String) {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: key
+        ]
+        
+        if value.isEmpty {
+            SecItemDelete(query as CFDictionary)
+            return
+        }
+        
+        let data = Data(value.utf8)
+        let attributes: [String: Any] = [
+            kSecValueData as String: data,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        ]
+        
+        let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
+        if status == errSecItemNotFound {
+            var addQuery = query
+            for (k, v) in attributes { addQuery[k] = v }
+            SecItemAdd(addQuery as CFDictionary, nil)
+        }
+    }
+    
+    static func migrateFromUserDefaultsIfNeeded() {
+        let defaults = UserDefaults.standard
+        let migratedKey = "remote_tokens_migrated_to_keychain"
+        if defaults.bool(forKey: migratedKey) { return }
+        
+        for key in ["access_token", "refresh_token"] {
+            if let legacy = defaults.string(forKey: key), !legacy.isEmpty {
+                write(legacy, for: key)
+                defaults.removeObject(forKey: key)
+            }
+        }
+        defaults.set(true, forKey: migratedKey)
     }
 }

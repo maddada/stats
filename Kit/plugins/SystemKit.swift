@@ -35,6 +35,9 @@ public enum Platform: String, Codable {
     case m4Ultra
     
     case m5
+    case m5Pro
+    case m5Max
+    case m5Ultra
     
     public static var apple: [Platform] {
         return [
@@ -42,8 +45,27 @@ public enum Platform: String, Codable {
             .m2, .m2Pro, .m2Max, .m2Ultra,
             .m3, .m3Pro, .m3Max, .m3Ultra,
             .m4, .m4Pro, .m4Max, .m4Ultra,
-            .m5
+            .m5, .m5Pro, .m5Max, .m5Ultra
         ]
+    }
+    
+    public var generation: Int {
+        switch self {
+        case .intel: return 0
+        case .m1, .m1Pro, .m1Max, .m1Ultra: return 1
+        case .m2, .m2Pro, .m2Max, .m2Ultra: return 2
+        case .m3, .m3Pro, .m3Max, .m3Ultra: return 3
+        case .m4, .m4Pro, .m4Max, .m4Ultra: return 4
+        case .m5, .m5Pro, .m5Max, .m5Ultra: return 5
+        }
+    }
+    
+    public func isNewerThan(_ other: Platform) -> Bool {
+        return self.generation > other.generation
+    }
+    
+    public func isNewerThanOrEqual(_ other: Platform) -> Bool {
+        return self.generation >= other.generation
     }
     
     public static var m1Gen: [Platform] {
@@ -59,7 +81,7 @@ public enum Platform: String, Codable {
         return [.m4, .m4Pro, .m4Max, .m4Ultra]
     }
     public static var m5Gen: [Platform] {
-        return [.m5 ]
+        return [.m5, .m5Pro, .m5Max, .m5Ultra]
     }
     
     public static var all: [Platform] {
@@ -74,12 +96,13 @@ public enum deviceType: String {
     case iMac
     case iMacPro
     case macbook
+    case macbookNeo
     case macbookAir
     case macbookPro
     case macStudio
     
     public static var all: [deviceType] {
-        return [.macMini, .macPro, .iMac, .iMacPro, .macbook, .macbookAir, .macbookPro, .macStudio]
+        return [.macMini, .macPro, .iMac, .iMacPro, .macbook, .macbookNeo, .macbookAir, .macbookPro, .macStudio]
     }
 }
 
@@ -87,6 +110,7 @@ public enum coreType: Int, Codable {
     case unknown = -1
     case efficiency = 1
     case performance = 2
+    case `super` = 3
 }
 
 public struct model_s {
@@ -114,9 +138,11 @@ public struct cpu_s: Codable {
     public var logicalCores: Int8? = nil
     public var eCores: Int32? = nil
     public var pCores: Int32? = nil
+    public var sCores: Int32? = nil
     public var cores: [core_s]? = nil
     public var eCoreFrequencies: [Int32]? = nil
     public var pCoreFrequencies: [Int32]? = nil
+    public var sCoreFrequencies: [Int32]? = nil
 }
 
 public struct dimm_s: Codable {
@@ -144,6 +170,7 @@ public struct disk_s: Codable {
     public var id: String? = nil
     public var name: String? = nil
     public var size: Int64? = nil
+    public var fileSystem: String? = nil
 }
 
 public struct display_s: Codable {
@@ -221,11 +248,10 @@ public class SystemKit {
         let version = systemVersion.majorVersion > 10 ? "\(systemVersion.majorVersion)" : "\(systemVersion.majorVersion).\(systemVersion.minorVersion)"
         self.device.os = os_s(name: osDict[version] ?? localizedString("Unknown"), version: systemVersion, build: build)
         
-        self.device.info.cpu = self.getCPUInfo()
+        (self.device.info.cpu, self.device.platform) = self.getCPUInfo()
         self.device.info.ram = self.getRamInfo()
         self.device.info.gpu = self.getGPUInfo()
         self.device.info.disk = self.getDiskInfo()
-        self.device.platform = self.getPlatform()
         self.device.display = self.getDisplayInfo()
     }
     
@@ -278,7 +304,7 @@ public class SystemKit {
         return nil
     }
     
-    private func getCPUInfo() -> cpu_s? {
+    private func getCPUInfo() -> (cpu_s?, Platform?) {
         var cpu = cpu_s()
         
         var sizeOfName = 0
@@ -295,6 +321,8 @@ public class SystemKit {
             cpu.name = name.condenseWhitespace()
         }
         
+        let platform = self.getPlatform(cpuName: cpu.name)
+        
         var size = UInt32(MemoryLayout<host_basic_info_data_t>.size / MemoryLayout<integer_t>.size)
         let hostInfo = host_basic_info_t.allocate(capacity: 1)
         defer {
@@ -307,27 +335,29 @@ public class SystemKit {
         
         if result != KERN_SUCCESS {
             error("read cores number: \(String(cString: mach_error_string(result), encoding: String.Encoding.ascii) ?? "unknown error")")
-            return nil
+            return (cpu, platform)
         }
         
         let data = hostInfo.move()
         cpu.physicalCores = Int8(data.physical_cpu)
         cpu.logicalCores = Int8(data.logical_cpu)
         
-        if let cores = getCPUCores() {
+        if let cores = self.getCPUCores(for: platform) {
             cpu.eCores = cores.0
             cpu.pCores = cores.1
-            cpu.cores = cores.2
+            cpu.sCores = cores.2
+            cpu.cores = cores.3
         }
-        if let freq = getFrequencies(cpuName: cpu.name ?? "") {
+        if let freq = self.getFrequencies(for: platform) {
             cpu.eCoreFrequencies = freq.0
             cpu.pCoreFrequencies = freq.1
+            cpu.sCoreFrequencies = freq.2
         }
         
-        return cpu
+        return (cpu, platform)
     }
     
-    func getCPUCores() -> (Int32?, Int32?, [core_s])? {
+    func getCPUCores(for platform: Platform?) -> (Int32?, Int32?, Int32?, [core_s])? {
         var iterator: io_iterator_t = io_iterator_t()
         let result = IOServiceGetMatchingServices(kIOMasterPortDefault, IOServiceMatching("AppleARMPE"), &iterator)
         if result != kIOReturnSuccess {
@@ -339,6 +369,8 @@ public class SystemKit {
         var list: [core_s] = []
         var pCores: Int32? = nil
         var eCores: Int32? = nil
+        var sCores: Int32? = nil
+        let isM5ProMaxOrNewer = platform == .m5Pro || platform == .m5Max || (platform?.isNewerThan(.m5) ?? false)
         
         while service != 0 {
             service = IOIteratorNext(iterator)
@@ -359,16 +391,26 @@ public class SystemKit {
                 
                 if name.matches("^cpu\\d") {
                     var type: coreType = .unknown
-                    
                     if let rawType = props.object(forKey: "cluster-type") as? Data,
                        let typ = String(data: rawType, encoding: .utf8)?.trimmed {
-                        switch typ {
-                        case "E":
-                            type = .efficiency
-                        case "P":
-                            type = .performance
-                        default:
-                            type = .unknown
+                        if isM5ProMaxOrNewer {
+                            switch typ {
+                            case "M":
+                                type = .performance
+                            case "P":
+                                type = .super
+                            default:
+                                type = .unknown
+                            }
+                        } else {
+                            switch typ {
+                            case "E":
+                                type = .efficiency
+                            case "P":
+                                type = .performance
+                            default:
+                                type = .unknown
+                            }
                         }
                     }
                     
@@ -379,11 +421,20 @@ public class SystemKit {
                     
                     list.append(core_s(id: id ?? -1, type: type))
                 } else if name.trimmed == "cpus" {
-                    eCores = (props.object(forKey: "e-core-count") as? Data)?.withUnsafeBytes { pointer in
-                        return pointer.load(as: Int32.self)
-                    }
-                    pCores = (props.object(forKey: "p-core-count") as? Data)?.withUnsafeBytes { pointer in
-                        return pointer.load(as: Int32.self)
+                    if isM5ProMaxOrNewer {
+                        pCores = (props.object(forKey: "m-core-count") as? Data)?.withUnsafeBytes { pointer in
+                            return pointer.load(as: Int32.self)
+                        }
+                        sCores = (props.object(forKey: "p-core-count") as? Data)?.withUnsafeBytes { pointer in
+                            return pointer.load(as: Int32.self)
+                        }
+                    } else {
+                        eCores = (props.object(forKey: "e-core-count") as? Data)?.withUnsafeBytes { pointer in
+                            return pointer.load(as: Int32.self)
+                        }
+                        pCores = (props.object(forKey: "p-core-count") as? Data)?.withUnsafeBytes { pointer in
+                            return pointer.load(as: Int32.self)
+                        }
                     }
                 }
                 
@@ -394,7 +445,7 @@ public class SystemKit {
         }
         IOObjectRelease(iterator)
         
-        return (eCores, pCores, list)
+        return (eCores, pCores, sCores, list)
     }
     
     private func getGPUInfo() -> [gpu_s]? {
@@ -432,6 +483,45 @@ public class SystemKit {
         }
         
         return list
+    }
+    
+    private func getFrequencies(for platform: Platform?) -> ([Int32], [Int32], [Int32])? {
+        var iterator = io_iterator_t()
+        let result = IOServiceGetMatchingServices(kIOMasterPortDefault, IOServiceMatching("AppleARMIODevice"), &iterator)
+        if result != kIOReturnSuccess {
+            print("Error find AppleARMIODevice: " + (String(cString: mach_error_string(result), encoding: String.Encoding.ascii) ?? "unknown error"))
+            return nil
+        }
+        
+        var eFreq: [Int32] = []
+        var pFreq: [Int32] = []
+        var sFreq: [Int32] = []
+        
+        let isCpuStartFromM4 = platform?.isNewerThanOrEqual(.m4) ?? false
+        let isM5ProMaxOrNewer = platform == .m5Pro || platform == .m5Max || (platform?.isNewerThan(.m5) ?? false)
+        
+        while case let child = IOIteratorNext(iterator), child != 0 {
+            defer { IOObjectRelease(child) }
+            guard let name = getIOName(child), name == "pmgr", let props = getIOProperties(child) else { continue }
+            
+            if isM5ProMaxOrNewer {
+                if let data = props.value(forKey: "voltage-states22-sram") {
+                    pFreq = convertCFDataToArr(data as! CFData, isCpuStartFromM4)
+                }
+                if let data = props.value(forKey: "voltage-states5-sram") {
+                    sFreq = convertCFDataToArr(data as! CFData, isCpuStartFromM4)
+                }
+            } else {
+                if let data = props.value(forKey: "voltage-states1-sram") {
+                    eFreq = convertCFDataToArr(data as! CFData, isCpuStartFromM4)
+                }
+                if let data = props.value(forKey: "voltage-states5-sram") {
+                    pFreq = convertCFDataToArr(data as! CFData, isCpuStartFromM4)
+                }
+            }
+        }
+        
+        return (eFreq, pFreq, sFreq)
     }
     
     private func getDiskInfo() -> [disk_s]? {
@@ -522,6 +612,9 @@ public class SystemKit {
                     if let totalSize = plist["TotalSize"] as? Int64 {
                         bootDisk.size = totalSize
                     }
+                    if let fileSystem = plist["FilesystemType"] as? String {
+                        bootDisk.fileSystem = fileSystem
+                    }
                     if bootDisk.id != nil {
                         bootableDisks.append(bootDisk)
                     }
@@ -530,35 +623,6 @@ public class SystemKit {
         }
         
         return bootableDisks
-    }
-    
-    private func getFrequencies(cpuName: String) -> ([Int32], [Int32])? {
-        var iterator = io_iterator_t()
-        let result = IOServiceGetMatchingServices(kIOMasterPortDefault, IOServiceMatching("AppleARMIODevice"), &iterator)
-        if result != kIOReturnSuccess {
-            print("Error find AppleARMIODevice: " + (String(cString: mach_error_string(result), encoding: String.Encoding.ascii) ?? "unknown error"))
-            return nil
-        }
-        
-        let chipsToMatch = ["m4", "m5"]
-        let isCpuStartFromM4 = chipsToMatch.contains { cpuName.lowercased().contains($0) }
-        
-        var eFreq: [Int32] = []
-        var pFreq: [Int32] = []
-        
-        while case let child = IOIteratorNext(iterator), child != 0 {
-            defer { IOObjectRelease(child) }
-            guard let name = getIOName(child), name == "pmgr", let props = getIOProperties(child) else { continue }
-            
-            if let data = props.value(forKey: "voltage-states1-sram") {
-                eFreq = convertCFDataToArr(data as! CFData, isCpuStartFromM4)
-            }
-            if let data = props.value(forKey: "voltage-states5-sram") {
-                pFreq = convertCFDataToArr(data as! CFData, isCpuStartFromM4)
-            }
-        }
-        
-        return (eFreq, pFreq)
     }
     
     public func getRamInfo() -> ram_s? {
@@ -636,6 +700,8 @@ public class SystemKit {
             return NSImage(named: NSImage.Name("imac"))!
         case .macbook:
             return NSImage(named: NSImage.Name("macbookAir"))!
+        case .macbookNeo:
+            return NSImage(named: NSImage.Name("macbookNeo"))!
         case .macbookAir:
             if year >= 2022 {
                 return NSImage(named: NSImage.Name("macbookAir"))!
@@ -678,8 +744,8 @@ public class SystemKit {
         return nil
     }
     
-    private func getPlatform() -> Platform? {
-        if let name = self.device.info.cpu?.name?.lowercased() {
+    private func getPlatform(cpuName: String?) -> Platform? {
+        if let name = cpuName?.lowercased() {
             if name.contains("intel") {
                 return .intel
             } else if name.contains("m1") {
@@ -723,7 +789,15 @@ public class SystemKit {
                     return .m4
                 }
             } else if name.contains("m5") {
-                return .m5
+                if name.contains("pro") {
+                    return .m5Pro
+                } else if name.contains("max") {
+                    return .m5Max
+                } else if name.contains("ultra") {
+                    return .m5Ultra
+                } else {
+                    return .m5
+                }
             }
         }
         return nil
@@ -809,8 +883,8 @@ let deviceDict: [String: model_s] = [
     "Mac13,2": model_s(name: "Mac Studio (M1 Ultra)", year: 2022, type: .macStudio),
     "Mac14,13": model_s(name: "Mac Studio (M2 Max)", year: 2023, type: .macStudio),
     "Mac14,14": model_s(name: "Mac Studio (M2 Ultra)", year: 2023, type: .macStudio),
-    "Mac15,14": model_s(name: "Mac Studio (M3 Max)", year: 2023, type: .macStudio),
-    "Mac16,9": model_s(name: "Mac Studio (M4 Max)", year: 2024, type: .macStudio),
+    "Mac15,14": model_s(name: "Mac Studio (M3 Ultra)", year: 2025, type: .macStudio),
+    "Mac16,9": model_s(name: "Mac Studio (M4 Max)", year: 2025, type: .macStudio),
     
     // Mac Pro
     "MacPro1,1": model_s(name: "Mac Pro", year: 2006, type: .macPro),
@@ -860,6 +934,9 @@ let deviceDict: [String: model_s] = [
     "MacBook9,1": model_s(name: "MacBook", year: 2016, type: .macbook),
     "MacBook10,1": model_s(name: "MacBook", year: 2017, type: .macbook),
     
+    // MacBook Neo
+    "Mac17,5": model_s(name: "MacBook Neo", year: 2026, type: .macbookNeo),
+    
     // MacBook Air
     "MacBookAir1,1": model_s(name: "MacBook Air 13\"", year: 2008, type: .macbookAir),
     "MacBookAir2,1": model_s(name: "MacBook Air 13\"", year: 2009, type: .macbookAir),
@@ -881,6 +958,10 @@ let deviceDict: [String: model_s] = [
     "Mac14,15": model_s(name: "MacBook Air 15\" (M2)", year: 2023, type: .macbookAir),
     "Mac15,12": model_s(name: "MacBook Air 13\" (M3)", year: 2024, type: .macbookAir),
     "Mac15,13": model_s(name: "MacBook Air 15\" (M3)", year: 2024, type: .macbookAir),
+    "Mac16,12": model_s(name: "MacBook Air 13\" (M4)", year: 2025, type: .macbookAir),
+    "Mac16,13": model_s(name: "MacBook Air 15\" (M4)", year: 2025, type: .macbookAir),
+    "Mac17,3": model_s(name: "MacBook Air 13\" (M5)", year: 2026, type: .macbookAir),
+    "Mac17,4": model_s(name: "MacBook Air 15\" (M5)", year: 2026, type: .macbookAir),
     
     // MacBook Pro
     "MacBookPro1,1": model_s(name: "MacBook Pro 15\"", year: 2006, type: .macbookPro),
@@ -944,7 +1025,12 @@ let deviceDict: [String: model_s] = [
     "Mac16,5": model_s(name: "MacBook Pro 16\" (M4 Max)", year: 2024, type: .macbookPro),
     "Mac16,6": model_s(name: "MacBook Pro 14\" (M4 Max)", year: 2024, type: .macbookPro),
     "Mac16,7": model_s(name: "MacBook Pro 16\" (M4 Pro)", year: 2024, type: .macbookPro),
-    "Mac16,8": model_s(name: "MacBook Pro 14\" (M4 Pro)", year: 2024, type: .macbookPro)
+    "Mac16,8": model_s(name: "MacBook Pro 14\" (M4 Pro)", year: 2024, type: .macbookPro),
+    "Mac17,2": model_s(name: "MacBook Pro 14\" (M5)", year: 2025, type: .macbookPro),
+    "Mac17,6": model_s(name: "MacBook Pro 16\" (M5 Max)", year: 2026, type: .macbookPro),
+    "Mac17,7": model_s(name: "MacBook Pro 14\" (M5 Max)", year: 2026, type: .macbookPro),
+    "Mac17,8": model_s(name: "MacBook Pro 16\" (M5 Pro)", year: 2026, type: .macbookPro),
+    "Mac17,9": model_s(name: "MacBook Pro 14\" (M5 Pro)", year: 2026, type: .macbookPro)
 ]
 
 let osDict: [String: String] = [

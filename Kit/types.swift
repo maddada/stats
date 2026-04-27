@@ -25,7 +25,7 @@ extension [DoubleValue] {
 
 public struct ColorValue: Equatable {
     public let value: Double
-    public let color: NSColor?
+    public var color: NSColor?
     
     public init(_ value: Double, color: NSColor? = nil) {
         self.value = value
@@ -266,6 +266,7 @@ public extension Notification.Name {
     static let toggleModule = Notification.Name("toggleModule")
     static let togglePopup = Notification.Name("togglePopup")
     static let toggleWidget = Notification.Name("toggleWidget")
+    static let togglePreview = Notification.Name("togglePreview")
     static let openModuleSettings = Notification.Name("openModuleSettings")
     static let clickInSettings = Notification.Name("clickInSettings")
     static let refreshPublicIP = Notification.Name("refreshPublicIP")
@@ -281,6 +282,7 @@ public extension Notification.Name {
     static let combinedModulesPopup = Notification.Name("combinedModulesPopup")
     static let remoteLoginSuccess = Notification.Name("remoteLoginSuccess")
     static let remoteState = Notification.Name("remoteState")
+    static let openWindow = Notification.Name("openWindow")
 }
 
 public var isARM: Bool {
@@ -403,7 +405,7 @@ public enum RAMPressure: String, Codable {
     case warning
     case critical
     
-    func pressureColor() -> NSColor {
+    public func pressureColor() -> NSColor {
         switch self {
         case .normal:
             return NSColor.systemGreen
@@ -411,6 +413,28 @@ public enum RAMPressure: String, Codable {
             return NSColor.systemYellow
         case .critical:
             return NSColor.systemRed
+        }
+    }
+    
+    public func number() -> Int {
+        switch self {
+        case .normal:
+            return 0
+        case .warning:
+            return 1
+        case .critical:
+            return 2
+        }
+    }
+    
+    public init(from: Int) {
+        switch from {
+        case 1:
+            self = .warning
+        case 2:
+            self = .critical
+        default:
+            self = .normal
         }
     }
 }

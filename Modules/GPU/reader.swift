@@ -24,10 +24,37 @@ let vendors: [Data: String] = [
     Data.init([0x02, 0x10, 0x00, 0x00]): "AMD"
 ]
 
+private func maxANEPower(for platform: Platform?) -> Double {
+    switch platform {
+    case .m1, .m1Pro, .m1Max:       return 2.0
+    case .m1Ultra:                  return 4.0
+    case .m2, .m2Pro, .m2Max:       return 2.5
+    case .m2Ultra:                  return 5.0
+    case .m3, .m3Pro, .m3Max:       return 3.0
+    case .m3Ultra:                  return 6.0
+    case .m4, .m4Pro, .m4Max:       return 6.0
+    case .m4Ultra:                  return 12.0
+    case .m5, .m5Pro, .m5Max:       return 8.0
+    case .m5Ultra:                  return 16.0
+    default:                        return 8.0
+    }
+}
+
 internal class InfoReader: Reader<GPUs> {
     private var gpus: GPUs = GPUs()
     private var displays: [gpu_s] = []
     private var devices: [device] = []
+
+    private var aneChannels: CFMutableDictionary? = nil
+    private var aneSubscription: IOReportSubscriptionRef? = nil
+    private var previousANEEnergy: Double = 0
+    private var previousANERead: Date? = nil
+    private var aneMaxPower: Double = 8.0
+
+    private var framesChannels: CFMutableDictionary? = nil
+    private var framesSubscription: IOReportSubscriptionRef? = nil
+    private var previousFramesCount: Int64 = 0
+    private var previousFramesTime: CFAbsoluteTime = 0
     
     public override func setup() {
         if let list = SystemKit.shared.device.info.gpu {
@@ -39,6 +66,12 @@ internal class InfoReader: Reader<GPUs> {
         }
         let devices = PCIdevices.filter{ $0.object(forKey: "IOName") as? String == "display" }
         
+        #if arch(arm64)
+        self.aneMaxPower = maxANEPower(for: SystemKit.shared.device.platform)
+        self.setupANE()
+        self.setupFrames()
+        #endif
+
         devices.forEach { (dict: NSDictionary) in
             guard let deviceID = dict["device-id"] as? Data, let vendorID = dict["vendor-id"] as? Data else {
                 error("device-id or vendor-id not found", log: self.log)
@@ -205,7 +238,139 @@ internal class InfoReader: Reader<GPUs> {
             }
         }
         
+        #if arch(arm64)
+        let anePower = self.readANEPower()
+        let aneUtil = anePower.map { min(1.0, max(0.0, $0 / self.aneMaxPower)) }
+        let fpsValue = self.readFrames()
+        for i in self.gpus.list.indices where self.gpus.list[i].IOClass.lowercased().contains("agx") {
+            self.gpus.list[i].aneUtilization = aneUtil ?? 0
+            self.gpus.list[i].fps = fpsValue
+        }
+        #endif
+        
         self.gpus.list.sort{ !$0.state && $1.state }
         self.callback(self.gpus)
+    }
+    
+    // MARK: - FPS
+    
+    private func setupFrames() {
+        let groups = ["DCP", "DCPEXT0", "DCPEXT1", "DCPEXT2", "DCPEXT3"]
+        var merged: CFMutableDictionary? = nil
+        
+        for group in groups {
+            guard let channel = IOReportCopyChannelsInGroup(group as CFString, "swap" as CFString, 0, 0, 0)?.takeRetainedValue() else { continue }
+            if merged == nil {
+                merged = CFDictionaryCreateMutableCopy(kCFAllocatorDefault, 0, channel)
+            } else {
+                IOReportMergeChannels(merged, channel, nil)
+            }
+        }
+        
+        guard let merged, let dict = merged as? [String: Any], dict["IOReportChannels"] != nil else { return }
+        
+        self.framesChannels = merged
+        var sub: Unmanaged<CFMutableDictionary>?
+        self.framesSubscription = IOReportCreateSubscription(nil, merged, &sub, 0, nil)
+        sub?.release()
+    }
+    
+    private func readFrames() -> Double? {
+        guard let subscription = self.framesSubscription,
+              let channels = self.framesChannels,
+              let sample = IOReportCreateSamples(subscription, channels, nil)?.takeRetainedValue(),
+              let dict = sample as? [String: Any] else {
+            return nil
+        }
+        let items = dict["IOReportChannels"] as! CFArray
+        
+        var total: Int64 = 0
+        for i in 0..<CFArrayGetCount(items) {
+            let item = unsafeBitCast(CFArrayGetValueAtIndex(items, i), to: CFDictionary.self)
+            guard let group = IOReportChannelGetGroup(item)?.takeUnretainedValue() as? String,
+                  group.hasPrefix("DCP"),
+                  let sub = IOReportChannelGetSubGroup(item)?.takeUnretainedValue() as? String,
+                  sub == "swap" else { continue }
+            total += IOReportSimpleGetIntegerValue(item, 0)
+        }
+        
+        let now = CFAbsoluteTimeGetCurrent()
+        defer {
+            self.previousFramesCount = total
+            self.previousFramesTime = now
+        }
+        
+        guard self.previousFramesTime != 0 else { return nil }
+        let elapsed = now - self.previousFramesTime
+        guard elapsed > 0 else { return nil }
+        let delta = total - self.previousFramesCount
+        guard delta >= 0 else { return nil }
+        return Double(delta) / elapsed
+    }
+    
+    // MARK: - ANE power
+    
+    private func setupANE() {
+        guard let channel = IOReportCopyChannelsInGroup("Energy Model" as CFString, nil, 0, 0, 0)?.takeRetainedValue() else { return }
+        
+        let size = CFDictionaryGetCount(channel)
+        guard let mutable = CFDictionaryCreateMutableCopy(kCFAllocatorDefault, size, channel),
+              let dict = mutable as? [String: Any], dict["IOReportChannels"] != nil else { return }
+        
+        self.aneChannels = mutable
+        var sub: Unmanaged<CFMutableDictionary>?
+        self.aneSubscription = IOReportCreateSubscription(nil, mutable, &sub, 0, nil)
+        sub?.release()
+    }
+    
+    private func readANEPower() -> Double? {
+        guard let subscription = self.aneSubscription,
+              let channels = self.aneChannels,
+              let reportSample = IOReportCreateSamples(subscription, channels, nil)?.takeRetainedValue(),
+              let dict = reportSample as? [String: Any] else {
+            return nil
+        }
+        let items = dict["IOReportChannels"] as! CFArray
+        
+        var currentEnergy: Double = 0
+        var found = false
+        
+        for i in 0..<CFArrayGetCount(items) {
+            let item = unsafeBitCast(CFArrayGetValueAtIndex(items, i), to: CFDictionary.self)
+            
+            guard let group = IOReportChannelGetGroup(item)?.takeUnretainedValue() as? String,
+                  group == "Energy Model",
+                  let channel = IOReportChannelGetChannelName(item)?.takeUnretainedValue() as? String,
+                  channel.starts(with: "ANE") else { continue }
+            
+            let raw = Double(IOReportSimpleGetIntegerValue(item, 0))
+            let unit = (IOReportChannelGetUnitLabel(item)?.takeUnretainedValue() as? String)?
+                .trimmingCharacters(in: .whitespaces) ?? ""
+            
+            let joules: Double
+            switch unit.lowercased() {
+            case "mj":       joules = raw / 1e3
+            case "uj", "µj": joules = raw / 1e6
+            case "nj":       joules = raw / 1e9
+            case "pj":       joules = raw / 1e12
+            default:         joules = raw / 1e9
+            }
+            
+            currentEnergy += joules
+            found = true
+        }
+        
+        guard found else { return nil }
+        
+        let now = Date()
+        defer {
+            self.previousANEEnergy = currentEnergy
+            self.previousANERead = now
+        }
+        
+        guard let previousRead = self.previousANERead else { return 0 }
+        let elapsed = now.timeIntervalSince(previousRead)
+        guard elapsed > 0 else { return 0 }
+        return (currentEnergy - self.previousANEEnergy) / elapsed
     }
 }

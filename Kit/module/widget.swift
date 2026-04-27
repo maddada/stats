@@ -73,8 +73,8 @@ public enum widget_t: String {
             preview = Tachometer(title: module, preview: true)
             item = Tachometer(title: module, preview: false)
         case .state:
-            preview = StateWidget(title: module, config: widgetConfig, preview: true)
-            item = StateWidget(title: module, config: widgetConfig, preview: false)
+            preview = DotWidget(title: module, config: widgetConfig, preview: true)
+            item = DotWidget(title: module, config: widgetConfig, preview: false)
         case .text:
             preview = TextWidget(title: module, config: widgetConfig, preview: true)
             item = TextWidget(title: module, config: widgetConfig, preview: false)
@@ -167,7 +167,7 @@ open class WidgetWrapper: NSView, widget_p {
         self.type = type
         self.title = title
         self.shadowSize = frame.size
-        self.queue = DispatchQueue(label: "eu.exelban.Stats.WidgetWrapper.\(type.rawValue).\(title)")
+        self.queue = DispatchQueue(label: "com.madda.Stats.WidgetWrapper.\(type.rawValue).\(title)")
         
         super.init(frame: frame)
     }
@@ -324,7 +324,6 @@ public class SWidget {
     
     public func setMenuBarItem(state: Bool) {
         if state {
-            restoreNSStatusItemPosition(id: "\(self.module)_\(self.type.rawValue)")
             DispatchQueue.main.async(execute: {
                 self.menuBarItem = NSStatusBar.system.statusItem(withLength: self.item.frame.width)
                 DispatchQueue.main.async(execute: {
@@ -346,7 +345,6 @@ public class SWidget {
                 self.menuBarItem?.button?.sendAction(on: [.leftMouseDown, .rightMouseDown])
             })
         } else if let item = self.menuBarItem {
-            saveNSStatusItemPosition(id: "\(self.module)_\(self.type.rawValue)")
             NSStatusBar.system.removeStatusItem(item)
             self.menuBarItem = nil
         }
@@ -399,7 +397,7 @@ public class MenuBar {
     
     init(moduleName: String) {
         self.moduleName = moduleName
-        self.queue = DispatchQueue(label: "eu.exelban.Stats.MenuBar.\(moduleName)")
+        self.queue = DispatchQueue(label: "com.madda.Stats.MenuBar.\(moduleName)")
         self.oneView = Store.shared.bool(key: "\(self.moduleName)_oneView", defaultValue: self.oneView)
         self.view.identifier = NSUserInterfaceItemIdentifier(rawValue: moduleName)
         

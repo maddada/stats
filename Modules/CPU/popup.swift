@@ -21,6 +21,9 @@ internal class Popup: PopupWrapper {
             if SystemKit.shared.device.info.cpu?.eCores != nil {
                 count += 1
             }
+            if SystemKit.shared.device.info.cpu?.sCores != nil {
+                count += 1
+            }
             if SystemKit.shared.device.info.cpu?.pCores != nil {
                 count += 1
             }
@@ -32,6 +35,9 @@ internal class Popup: PopupWrapper {
         get {
             var count: CGFloat = 1
             if SystemKit.shared.device.info.cpu?.eCores != nil {
+                count += 1
+            }
+            if SystemKit.shared.device.info.cpu?.sCores != nil {
                 count += 1
             }
             if SystemKit.shared.device.info.cpu?.pCores != nil {
@@ -49,6 +55,7 @@ internal class Popup: PopupWrapper {
     private var speedLimitField: NSTextField? = nil
     private var eCoresField: NSTextField? = nil
     private var pCoresField: NSTextField? = nil
+    private var sCoresField: NSTextField? = nil
     private var uptimeField: NSTextField? = nil
     private var average1Field: NSTextField? = nil
     private var average5Field: NSTextField? = nil
@@ -56,23 +63,26 @@ internal class Popup: PopupWrapper {
     private var coresFreqField: NSTextField? = nil
     private var eCoresFreqField: NSTextField? = nil
     private var pCoresFreqField: NSTextField? = nil
+    private var sCoresFreqField: NSTextField? = nil
     private var eCoresFreqColorView: NSView? = nil
     private var pCoresFreqColorView: NSView? = nil
+    private var sCoresFreqColorView: NSView? = nil
     
     private var systemColorView: NSView? = nil
     private var userColorView: NSView? = nil
     private var idleColorView: NSView? = nil
     private var eCoresColorView: NSView? = nil
     private var pCoresColorView: NSView? = nil
+    private var sCoresColorView: NSView? = nil
     
     private var chartPrefSection: PreferencesSection? = nil
     private var sliderView: NSView? = nil
     
     private var lineChart: LineChartView? = nil
-    private var barChart: BarChartView? = nil
+    private var columnChart: ColumnChartView? = nil
     private var circle: PieChartView? = nil
-    private var temperatureCircle: HalfCircleGraphView? = nil
-    private var frequencyCircle: HalfCircleGraphView? = nil
+    private var temperatureCircle: PieChartView? = nil
+    private var frequencyCircle: PieChartView? = nil
     private var initialized: Bool = false
     private var initializedTemperature: Bool = false
     private var initializedFrequency: Bool = false
@@ -98,6 +108,8 @@ internal class Popup: PopupWrapper {
     private var eCoresColor: NSColor { self.eCoresColorState.additional as? NSColor ?? NSColor.systemTeal }
     private var pCoresColorState: SColor = .indigo
     private var pCoresColor: NSColor { self.pCoresColorState.additional as? NSColor ?? NSColor.systemBlue }
+    private var sCoresColorState: SColor = .orange
+    private var sCoresColor: NSColor { self.sCoresColorState.additional as? NSColor ?? NSColor.systemOrange }
     
     private var processesView: NSView? = nil
     private var frequenciesView: NSView? = nil
@@ -134,6 +146,7 @@ internal class Popup: PopupWrapper {
         self.chartColorState = SColor.fromString(Store.shared.string(key: "\(self.title)_chartColor", defaultValue: self.chartColorState.key))
         self.eCoresColorState = SColor.fromString(Store.shared.string(key: "\(self.title)_eCoresColor", defaultValue: self.eCoresColorState.key))
         self.pCoresColorState = SColor.fromString(Store.shared.string(key: "\(self.title)_pCoresColor", defaultValue: self.pCoresColorState.key))
+        self.sCoresColorState = SColor.fromString(Store.shared.string(key: "\(self.title)_sCoresColor", defaultValue: self.sCoresColorState.key))
         self.lineChartHistory = Store.shared.int(key: "\(self.title)_lineChartHistory", defaultValue: self.lineChartHistory)
         self.lineChartScale = Scale.fromString(Store.shared.string(key: "\(self.title)_lineChartScale", defaultValue: self.lineChartScale.key))
         self.lineChartFixedScale = Double(Store.shared.int(key: "\(self.title)_lineChartFixedScale", defaultValue: 100)) / 100
@@ -193,12 +206,12 @@ internal class Popup: PopupWrapper {
         self.circle!.toolTip = localizedString("CPU usage")
         usage.addSubview(self.circle!)
         
-        self.temperatureCircle = HalfCircleGraphView(frame: NSRect(x: 0, y: 0, width: temperature.frame.width, height: temperature.frame.height))
+        self.temperatureCircle = PieChartView(frame: NSRect(x: 0, y: 0, width: temperature.frame.width, height: temperature.frame.height), openCircle: true)
         self.temperatureCircle!.toolTip = localizedString("CPU temperature")
         (self.temperatureCircle! as NSView).isHidden = true
         temperature.addSubview(self.temperatureCircle!)
         
-        self.frequencyCircle = HalfCircleGraphView(frame: NSRect(x: 0, y: 0, width: frequency.frame.width, height: frequency.frame.height))
+        self.frequencyCircle = PieChartView(frame: NSRect(x: 0, y: 0, width: frequency.frame.width, height: frequency.frame.height), openCircle: true)
         self.frequencyCircle!.toolTip = localizedString("CPU frequency")
         (self.frequencyCircle! as NSView).isHidden = true
         frequency.addSubview(self.frequencyCircle!)
@@ -225,9 +238,9 @@ internal class Popup: PopupWrapper {
             box.layer?.backgroundColor = NSColor.lightGray.withAlphaComponent(0.1).cgColor
             box.layer?.cornerRadius = 3
             
-            let chartFrame = NSRect(x: 1, y: 0, width: box.frame.width, height: box.frame.height)
+            let chartFrame = NSRect(x: 1, y: 0, width: box.frame.width - 2, height: box.frame.height)
             self.lineChart = LineChartView(frame: chartFrame, num: self.lineChartHistory, scale: self.lineChartScale, fixedScale: self.lineChartFixedScale)
-            self.lineChart?.color = self.chartColor
+            self.lineChart?.setColor(self.chartColor)
             box.addSubview(self.lineChart!)
             
             return box
@@ -244,13 +257,13 @@ internal class Popup: PopupWrapper {
                 box.layer?.backgroundColor = NSColor.lightGray.withAlphaComponent(0.1).cgColor
                 box.layer?.cornerRadius = 3
                 
-                let chart = BarChartView(frame: NSRect(
+                let chart = ColumnChartView(frame: NSRect(
                     x: Constants.Popup.spacing,
                     y: Constants.Popup.spacing,
                     width: view.frame.width - (Constants.Popup.spacing*2),
                     height: box.frame.height - (Constants.Popup.spacing*2)
                 ), num: Int(cores))
-                self.barChart = chart
+                self.columnChart = chart
                 
                 box.addSubview(chart)
                 
@@ -287,6 +300,9 @@ internal class Popup: PopupWrapper {
         }
         if SystemKit.shared.device.info.cpu?.pCores != nil {
             (self.pCoresColorView, _, self.pCoresField) = popupWithColorRow(container, color: self.pCoresColor, title: "\(localizedString("Performance cores")):", value: "")
+        }
+        if SystemKit.shared.device.info.cpu?.sCores != nil {
+            (self.sCoresColorView, _, self.sCoresField) = popupWithColorRow(container, color: self.sCoresColor, title: "\(localizedString("Super cores")):", value: "")
         }
         
         self.uptimeField = popupRow(container, title: "\(localizedString("Uptime")):", value: self.uptimeValue).1
@@ -333,6 +349,9 @@ internal class Popup: PopupWrapper {
             if SystemKit.shared.device.info.cpu?.pCores != nil {
                 (self.pCoresFreqColorView, _, self.pCoresFreqField) = popupWithColorRow(container, color: self.pCoresColor, title: "\(localizedString("Performance cores")):", value: "")
             }
+            if SystemKit.shared.device.info.cpu?.sCores != nil {
+                (self.sCoresFreqColorView, _, self.sCoresFreqField) = popupWithColorRow(container, color: self.sCoresColor, title: "\(localizedString("Super cores")):", value: "")
+            }
         }
         
         view.addSubview(separator)
@@ -374,8 +393,8 @@ internal class Popup: PopupWrapper {
                 self.circle?.toolTip = "\(localizedString("CPU usage")): \(Int(value.totalUsage.rounded(toPlaces: 2) * 100))%"
                 self.circle?.setValue(value.totalUsage)
                 self.circle?.setSegments([
-                    circle_segment(value: value.systemLoad, color: self.systemColor),
-                    circle_segment(value: value.userLoad, color: self.userColor)
+                    ColorValue(value.systemLoad, color: self.systemColor),
+                    ColorValue(value.userLoad, color: self.userColor)
                 ])
                 self.circle?.setNonActiveSegmentColor(self.idleColor)
                 
@@ -385,18 +404,22 @@ internal class Popup: PopupWrapper {
                 if let field = self.pCoresField, let usage = value.usagePCores {
                     field.stringValue = "\(Int(usage * 100))%"
                 }
+                if let field = self.sCoresField, let usage = value.usageSCores {
+                    field.stringValue = "\(Int(usage * 100))%"
+                }
                 
                 var usagePerCore: [ColorValue] = []
                 if let cores = SystemKit.shared.device.info.cpu?.cores, cores.count == value.usagePerCore.count {
                     for i in 0..<value.usagePerCore.count {
-                        usagePerCore.append(ColorValue(value.usagePerCore[i], color: cores[i].type == .efficiency ? self.eCoresColor : self.pCoresColor))
+                        let color = cores[i].type == .efficiency ? self.eCoresColor : cores[i].type == .super ? self.sCoresColor : self.pCoresColor
+                        usagePerCore.append(ColorValue(value.usagePerCore[i], color: color))
                     }
                 } else {
                     for i in 0..<value.usagePerCore.count {
                         usagePerCore.append(ColorValue(value.usagePerCore[i], color: NSColor.systemBlue))
                     }
                 }
-                self.barChart?.setValues(usagePerCore)
+                self.columnChart?.setValues(usagePerCore)
                 
                 self.initialized = true
             }
@@ -435,18 +458,28 @@ internal class Popup: PopupWrapper {
             }
             
             if (self.window?.isVisible ?? false) || !self.initializedFrequency {
-                if value.value > self.maxFreq {
-                    self.maxFreq = value.value
+                if let v = value.value {
+                    if v > self.maxFreq {
+                        self.maxFreq = v
+                    }
+                    
+                    self.coresFreqField?.stringValue = "\(Int(v)) MHz"
+                    if let circle = self.frequencyCircle {
+                        circle.setValue((100*v)/self.maxFreq)
+                        circle.setText("\((v/1000).rounded(toPlaces: 2))")
+                        circle.toolTip = "\(localizedString("CPU frequency")): \(Int(v)) MHz - \(((100*v)/self.maxFreq).rounded(toPlaces: 2))%"
+                    }
                 }
                 
-                self.coresFreqField?.stringValue = "\(Int(value.value)) MHz"
-                if let circle = self.frequencyCircle {
-                    circle.setValue((100*value.value)/self.maxFreq)
-                    circle.setText("\((value.value/1000).rounded(toPlaces: 2))")
-                    circle.toolTip = "\(localizedString("CPU frequency")): \(Int(value.value)) MHz - \(((100*value.value)/self.maxFreq).rounded(toPlaces: 2))%"
+                if let v = value.eCore {
+                    self.eCoresFreqField?.stringValue = "\(Int(v)) MHz"
                 }
-                self.eCoresFreqField?.stringValue = "\(Int(value.eCore)) MHz"
-                self.pCoresFreqField?.stringValue = "\(Int(value.pCore)) MHz"
+                if let v = value.pCore {
+                    self.pCoresFreqField?.stringValue = "\(Int(v)) MHz"
+                }
+                if let v = value.sCore {
+                    self.sCoresFreqField?.stringValue = "\(Int(v)) MHz"
+                }
                 
                 self.initializedFrequency = true
             }
@@ -556,6 +589,11 @@ internal class Popup: PopupWrapper {
                 action: #selector(self.togglePCoresColor),
                 items: SColor.allColors,
                 selected: self.pCoresColorState.key
+            )),
+            PreferencesRow(localizedString("Super cores color"), component: selectView(
+                action: #selector(self.toggleSCoresColor),
+                items: SColor.allColors,
+                selected: self.sCoresColorState.key
             ))
         ]))
         
@@ -622,7 +660,7 @@ internal class Popup: PopupWrapper {
         self.chartColorState = newValue
         Store.shared.set(key: "\(self.title)_chartColor", value: key)
         if let color = newValue.additional as? NSColor {
-            self.lineChart?.color = color
+            self.lineChart?.setColor(color)
         }
     }
     @objc private func toggleECoresColor(_ sender: NSMenuItem) {
@@ -645,6 +683,17 @@ internal class Popup: PopupWrapper {
         if let color = (newValue.additional as? NSColor) {
             self.pCoresColorView?.layer?.backgroundColor = color.cgColor
             self.pCoresFreqColorView?.layer?.backgroundColor = color.cgColor
+        }
+    }
+    @objc private func toggleSCoresColor(_ sender: NSMenuItem) {
+        guard let key = sender.representedObject as? String, let newValue = SColor.allColors.first(where: { $0.key == key }) else {
+            return
+        }
+        self.sCoresColorState = newValue
+        Store.shared.set(key: "\(self.title)_sCoresColor", value: key)
+        if let color = (newValue.additional as? NSColor) {
+            self.sCoresColorView?.layer?.backgroundColor = color.cgColor
+            self.sCoresFreqColorView?.layer?.backgroundColor = color.cgColor
         }
     }
     @objc private func toggleLineChartHistory(_ sender: NSMenuItem) {

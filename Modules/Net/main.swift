@@ -144,8 +144,8 @@ public class Network: Module {
     private var processReader: ProcessReader? = nil
     private var connectivityReader: ConnectivityReader? = nil
     
-    private let ipUpdater = NSBackgroundActivityScheduler(identifier: "eu.exelban.Stats.Network.IP")
-    private let usageReseter = NSBackgroundActivityScheduler(identifier: "eu.exelban.Stats.Network.Usage")
+    private let ipUpdater = NSBackgroundActivityScheduler(identifier: "com.madda.Stats.Network.IP")
+    private let usageReseter = NSBackgroundActivityScheduler(identifier: "com.madda.Stats.Network.Usage")
     
     private var widgetActivationThresholdState: Bool {
         Store.shared.bool(key: "\(self.config.name)_widgetActivationThresholdState", defaultValue: false)
@@ -208,7 +208,7 @@ public class Network: Module {
         self.settingsView.usageResetCallback = { [weak self] in
             self?.setUsageReset()
         }
-        self.settingsView.ICMPHostCallback = { [weak self] isDisabled in
+        self.settingsView.connectivityHostCallback = { [weak self] isDisabled in
             if isDisabled {
                 self?.popupView.resetConnectivityView()
                 self?.connectivityCallback(Network_Connectivity(status: false))
@@ -275,6 +275,8 @@ public class Network: Module {
                         case "private": replacement = value.laddr.v4 ?? value.laddr.v6 ?? "-"
                         case "privateV4": replacement = value.laddr.v4 ?? "-"
                         case "privateV6": replacement = value.laddr.v6 ?? "-"
+                        case "countryCode": replacement = value.raddr.countryCode ?? "-"
+                        case "flag": replacement = value.raddr.countryCode != nil ? countryFlag(value.raddr.countryCode!) : "-"
                         default: return
                         }
                     case "$interface":
@@ -350,7 +352,9 @@ public class Network: Module {
         
         self.menuBar.widgets.filter{ $0.isActive }.forEach { (w: SWidget) in
             switch w.item {
-            case let widget as StateWidget: widget.setValue(value.status)
+            case let widget as DotWidget:
+                let value = value.status ? SColor.secondGreen : SColor.secondRed
+                widget.setValue(value.additional as? NSColor ?? .systemGray)
             default: break
             }
         }
